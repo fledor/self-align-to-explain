@@ -1,19 +1,17 @@
 """
-DPO Training Script with LoRA Adapters for Qwen 7B
-===================================================
+DPO Training Script with LoRA Adapters
+=======================================
 
-This script fine-tunes a Qwen 7B model using DPO (Direct Preference Optimization)
-with LoRA adapters on SNLI-based preference pairs.
+This script fine-tunes a model using DPO (Direct Preference Optimization)
+with LoRA adapters on counterfactual preference pairs.
 
 Usage:
     python train_dpo_lora.py \
-        --dataset_path <path_to_preference_dataset> \
+        --dataset_path ./results/dpo_pairs/dpo_training.jsonl \
         --output_dir ./qwen7b-dpo-lora \
         --num_train_epochs 1
 
 The preference dataset should have columns: "prompt", "chosen", "rejected"
-Or if using standard format: "prompt", "chosen", "rejected" where chosen/rejected
-are the preferred and non-preferred responses.
 """
 
 import argparse
@@ -26,24 +24,32 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
 from trl import DPOConfig, DPOTrainer
 
+from config import Config
+
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="DPO Training with LoRA for Qwen 7B")
+    parser = argparse.ArgumentParser(description="DPO Training with LoRA")
     
     # Model arguments
     parser.add_argument(
         "--model_name_or_path",
         type=str,
-        default="Qwen/Qwen2-7B-Instruct",
-        help="Path to pretrained model or model identifier from huggingface.co/models",
+        default=Config.MODEL_NAME,
+        help=f"Path to pretrained model (default: {Config.MODEL_NAME})",
+    )
+    parser.add_argument(
+        "--hf_token",
+        type=str,
+        default=Config.HF_TOKEN,
+        help="HuggingFace token for model access",
     )
     
     # Dataset arguments
     parser.add_argument(
         "--dataset_path",
         type=str,
-        required=True,
-        help="Path to the preference dataset (local path or HuggingFace dataset name)",
+        default=os.path.join(Config.DPO_DATASET_DIR, "dpo_training.jsonl"),
+        help=f"Path to the preference dataset (default: {Config.DPO_DATASET_DIR}/dpo_training.jsonl)",
     )
     parser.add_argument(
         "--dataset_split",
@@ -101,8 +107,8 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="./qwen7b-dpo-lora",
-        help="Output directory for model checkpoints",
+        default=os.path.join(Config.OUTPUT_DIR, "dpo_model"),
+        help=f"Output directory for model checkpoints (default: {Config.OUTPUT_DIR}/dpo_model)",
     )
     parser.add_argument(
         "--num_train_epochs",
@@ -283,6 +289,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(
         args.model_name_or_path,
         trust_remote_code=True,
+        token=args.hf_token,
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -306,6 +313,7 @@ def main():
     
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
+        token=args.hf_token,
         **model_kwargs,
     )
     

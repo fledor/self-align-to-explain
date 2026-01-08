@@ -38,16 +38,16 @@ class Config:
     MAX_ENTRIES: int = None
     
     # ==========================================================================
-    # Generation Diversity Parameters
+    # Generation Parameters
     # ==========================================================================
-    # Temperature values for sampling diversity
-    TEMPERATURES: list = [0.7, 0.9, 1.0, 1.1, 1.2]
+    # High temperature for diverse sampling (variety comes from sampling, not param variation)
+    TEMPERATURE: float = 1.2
     
-    # Top-p (nucleus sampling) values
-    TOP_P_VALUES: list = [0.85, 0.92, 0.98]
+    # Top-p (nucleus sampling) - high value for diversity
+    TOP_P: float = 0.95
     
-    # Top-k values
-    TOP_K_VALUES: list = [40, 80, 150]
+    # Top-k - high value for diversity
+    TOP_K: int = 100
     
     # Target number of counterfactuals per entry
     COUNTERFACTUALS_PER_ENTRY: int = 40

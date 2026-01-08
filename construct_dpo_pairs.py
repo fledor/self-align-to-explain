@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Optional
 
 from tqdm import tqdm
+from transformers import AutoTokenizer
 
 from config import Config
-from prompts import get_generation_prompt, format_chat_messages, SYSTEM_PROMPT
+from prompts import get_generation_prompt, format_chat_messages
 from utils import load_jsonl, save_jsonl, save_json
 
 
@@ -59,6 +60,12 @@ def get_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="Minimum pairs required per entry (default: 1)",
+    )
+    parser.add_argument(
+        "--model_name",
+        type=str,
+        default=Config.MODEL_NAME,
+        help=f"Model name for tokenizer (default: {Config.MODEL_NAME})",
     )
     
     return parser
@@ -117,6 +124,7 @@ def select_rejected_candidates(counterfactuals: list[dict], count: int) -> list[
 def format_prompt_for_dpo(
     entry: dict,
     target_label: str,
+    tokenizer: Optional[AutoTokenizer] = None,
 ) -> str:
     """
     Format the prompt for a DPO pair.
@@ -124,6 +132,7 @@ def format_prompt_for_dpo(
     Args:
         entry: The dataset entry
         target_label: The target label for the counterfactual
+        tokenizer: Tokenizer to apply chat template (optional)
         
     Returns:
         Formatted prompt string (includes system message)
@@ -143,9 +152,19 @@ def format_prompt_for_dpo(
         target_label=target_label,
     )
     
-    # Combine system and user prompt in a standard format
-    # This format works well with chat models
-    full_prompt = f"<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n"
+    # Create chat messages
+    messages = format_chat_messages(system_prompt, user_prompt)
+    
+    # Apply chat template using tokenizer if available
+    if tokenizer is not None:
+        full_prompt = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    else:
+        # Fallback: simple concatenation (not recommended)
+        full_prompt = f"System: {system_prompt}\n\nUser: {user_prompt}\n\nAssistant:"
     
     return full_prompt
 
@@ -154,6 +173,7 @@ def construct_pairs_for_entry(
     entry: dict,
     chosen_count: int,
     rejected_count: int,
+    tokenizer: Optional[AutoTokenizer] = None,
 ) -> list[dict]:
     """
     Construct DPO pairs for a single entry.
@@ -162,6 +182,7 @@ def construct_pairs_for_entry(
         entry: Entry with evaluated counterfactuals
         chosen_count: Number of chosen to select
         rejected_count: Number of rejected to select
+        tokenizer: Tokenizer for chat template formatting
         
     Returns:
         List of DPO pairs
@@ -182,7 +203,7 @@ def construct_pairs_for_entry(
         for rejected_cf in rejected_cfs:
             # Use the same target label for the prompt as the chosen example
             # This ensures the prompt matches the chosen response
-            prompt = format_prompt_for_dpo(entry, chosen_cf["target_label"])
+            prompt = format_prompt_for_dpo(entry, chosen_cf["target_label"], tokenizer)
             
             pair = {
                 "prompt": prompt,
@@ -218,12 +239,21 @@ def main():
     print("=" * 60)
     print(f"Input: {args.input_dir}")
     print(f"Output: {args.output_dir}")
+    print(f"Model: {args.model_name}")
     print(f"Chosen per entry: {args.chosen_count}")
     print(f"Rejected per entry: {args.rejected_count}")
     print("=" * 60)
     
     # Ensure output directory exists
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Load tokenizer for chat template formatting
+    print("\nLoading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_name,
+        token=Config.HF_TOKEN,
+        trust_remote_code=True,
+    )
     
     all_pairs = []
     stats = {
@@ -255,6 +285,7 @@ def main():
                 entry=entry,
                 chosen_count=args.chosen_count,
                 rejected_count=args.rejected_count,
+                tokenizer=tokenizer,
             )
             
             if len(pairs) >= args.min_pairs_per_entry:

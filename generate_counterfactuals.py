@@ -1,34 +1,31 @@
 """
 Counterfactual Generation Script.
 
-Generates diverse counterfactuals for each dataset entry using varied
-sampling parameters (temperature, top_p, top_k).
+Generates diverse counterfactuals for each dataset entry using high
+temperature sampling to ensure variety.
 """
 
 import argparse
-import itertools
-import random
 from typing import Optional
 
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from config import Config
-from datasets import get_dataset, load_all_datasets
+from datasets import get_dataset
 from prompts import get_generation_prompt, format_chat_messages
 from utils import (
     parse_edit_tag,
     get_progress_file,
     load_progress,
     append_jsonl,
-    save_json,
 )
 
 
 def get_parser() -> argparse.ArgumentParser:
     """Get argument parser."""
     parser = argparse.ArgumentParser(
-        description="Generate diverse counterfactuals for NLI datasets"
+        description="Generate diverse counterfactuals for datasets"
     )
     
     parser.add_argument(
@@ -108,60 +105,6 @@ def load_model(model_name: str, cache_dir: str):
     return model, tokenizer
 
 
-def generate_sampling_configs(
-    num_configs: int,
-    temperatures: list[float],
-    top_p_values: list[float],
-    top_k_values: list[int],
-    target_labels: list[str],
-) -> list[dict]:
-    """
-    Generate a list of sampling configurations.
-    
-    Creates all combinations of parameters and samples the requested number.
-    
-    Args:
-        num_configs: Number of configurations to generate
-        temperatures: List of temperature values
-        top_p_values: List of top_p values
-        top_k_values: List of top_k values
-        target_labels: List of target labels
-        
-    Returns:
-        List of configuration dictionaries
-    """
-    # Generate all combinations
-    all_combinations = list(itertools.product(
-        temperatures,
-        top_p_values,
-        top_k_values,
-        target_labels,
-    ))
-    
-    # If we have more combinations than needed, sample
-    if len(all_combinations) > num_configs:
-        selected = random.sample(all_combinations, num_configs)
-    else:
-        # If we have fewer, repeat until we have enough
-        selected = []
-        while len(selected) < num_configs:
-            selected.extend(all_combinations)
-        selected = selected[:num_configs]
-        random.shuffle(selected)
-    
-    # Convert to list of dicts
-    configs = []
-    for temp, top_p, top_k, target_label in selected:
-        configs.append({
-            "temperature": temp,
-            "top_p": top_p,
-            "top_k": top_k,
-            "target_label": target_label,
-        })
-    
-    return configs
-
-
 def generate_single_counterfactual(
     model,
     tokenizer,
@@ -226,6 +169,9 @@ def process_entry(
     """
     Generate counterfactuals for a single entry.
     
+    Uses high temperature sampling for diversity. Target labels are
+    distributed evenly across the counterfactuals.
+    
     Args:
         model: The language model
         tokenizer: The tokenizer
@@ -243,34 +189,28 @@ def process_entry(
     # Get target labels (all labels except current)
     target_labels = dataset.get_alternative_labels(entry["label"])
     
-    # Generate sampling configurations
-    sampling_configs = generate_sampling_configs(
-        num_configs=num_counterfactuals,
-        temperatures=Config.TEMPERATURES,
-        top_p_values=Config.TOP_P_VALUES,
-        top_k_values=Config.TOP_K_VALUES,
-        target_labels=target_labels,
-    )
-    
     counterfactuals = []
     
-    for config in sampling_configs:
+    for i in range(num_counterfactuals):
+        # Distribute target labels evenly
+        target_label = target_labels[i % len(target_labels)]
+        
         # Get the prompt
         system_prompt, user_prompt = get_generation_prompt(
             dataset_name=dataset_name,
             entry=formatted,
-            target_label=config["target_label"],
+            target_label=target_label,
         )
         messages = format_chat_messages(system_prompt, user_prompt)
         
-        # Generate response
+        # Generate response with high temperature for diversity
         response = generate_single_counterfactual(
             model=model,
             tokenizer=tokenizer,
             messages=messages,
-            temperature=config["temperature"],
-            top_p=config["top_p"],
-            top_k=config["top_k"],
+            temperature=Config.TEMPERATURE,
+            top_p=Config.TOP_P,
+            top_k=Config.TOP_K,
             max_new_tokens=Config.MAX_NEW_TOKENS,
         )
         
@@ -279,10 +219,7 @@ def process_entry(
         
         counterfactuals.append({
             "edited_text": edited_text,
-            "target_label": config["target_label"],
-            "temperature": config["temperature"],
-            "top_p": config["top_p"],
-            "top_k": config["top_k"],
+            "target_label": target_label,
             "raw_response": response,
             "parse_success": edited_text is not None,
         })

@@ -1,26 +1,26 @@
 # Counterfactual DPO Training Pipeline
 
-A pipeline for generating diverse counterfactuals from NLI datasets, evaluating them, and training language models with Direct Preference Optimization (DPO) to produce better counterfactuals.
+A pipeline for generating diverse counterfactuals from classification datasets, evaluating them, and training language models with Direct Preference Optimization (DPO) to produce better counterfactuals.
 
 ## Overview
 
-This pipeline implements a three-stage approach:
+This pipeline implements a four-stage approach:
 
-1. **Generate** diverse counterfactuals using varied sampling parameters (temperature, top_p, top_k)
+1. **Generate** diverse counterfactuals using high-temperature sampling
 2. **Evaluate** counterfactuals on correctness, confidence, and semantic similarity
-3. **Construct** DPO preference pairs (good vs bad examples) for training
+3. **Construct** DPO preference pairs (good vs bad examples)
+4. **Train** the model with DPO to produce better counterfactuals
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  SNLI Dataset   │ ──▶ │    Generate     │ ──▶ │    Evaluate     │ ──▶ │  Construct DPO  │
-│ (premise/hypo)  │     │ Counterfactuals │     │ Counterfactuals │     │     Pairs       │
-└─────────────────┘     └─────────────────┘     └─────────────────┘     └─────────────────┘
-                              │                        │                        │
-                              ▼                        ▼                        ▼
-                        ~40 CFs/entry          Scored on:              Chosen vs Rejected
-                        varied sampling        - correctness           for DPO training
-                                               - confidence
-                                               - similarity
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│   Dataset   │ ─▶ │  Generate   │ ─▶ │  Evaluate   │ ─▶ │  Construct  │ ─▶ │    Train    │
+│  (any type) │    │     CFs     │    │     CFs     │    │  DPO Pairs  │    │  with DPO   │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+                         │                  │                  │                  │
+                         ▼                  ▼                  ▼                  ▼
+                   ~40 CFs/entry      correctness,       chosen vs         improved CF
+                   high temp          confidence,        rejected          model
+                                      similarity
 ```
 
 ## Installation
@@ -44,6 +44,11 @@ class Config:
     MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"  # Easily swap models
     ACTIVE_DATASETS = ["snli_premise", "snli_hypothesis"]  # Add more datasets
     COUNTERFACTUALS_PER_ENTRY = 40
+    
+    # High-temperature sampling for diversity
+    TEMPERATURE = 1.2
+    TOP_P = 0.95
+    TOP_K = 100
     # ... see config.py for all options
 ```
 
@@ -58,11 +63,7 @@ python generate_counterfactuals.py \
     --resume  # Resume from previous progress
 ```
 
-This generates diverse counterfactuals by varying:
-- Temperature: [0.7, 0.9, 1.0, 1.1, 1.2]
-- Top-p: [0.85, 0.92, 0.98]
-- Top-k: [40, 80, 150]
-- Target labels: All alternatives to the original
+Generates diverse counterfactuals using high-temperature sampling. Target labels are distributed evenly across the generated counterfactuals.
 
 Output: `results/counterfactuals/{dataset}_progress.jsonl`
 
@@ -74,7 +75,7 @@ python evaluate_counterfactuals.py \
 ```
 
 Evaluates each counterfactual on:
-- **Correctness**: Did the label flip succeed? (verified via LLM)
+- **Correctness**: Did the label change succeed? (verified via LLM)
 - **Confidence**: How confident is the model in the new label?
 - **Semantic Similarity**: How minimal were the edits?
 
@@ -100,8 +101,7 @@ Output: `results/dpo_pairs/dpo_training.jsonl`
 ```bash
 python train_dpo_lora.py \
     --dataset_path ./results/dpo_pairs/dpo_training.jsonl \
-    --model_name_or_path Qwen/Qwen2.5-7B-Instruct \
-    --output_dir ./qwen7b-dpo-cf \
+    --output_dir ./results/dpo_model \
     --num_train_epochs 1 \
     --bf16 \
     --gradient_checkpointing
@@ -112,7 +112,7 @@ python train_dpo_lora.py \
 ```
 dpo/
 ├── config.py                    # Central configuration
-├── datasets.py                  # Dataset registry (SNLI, extensible)
+├── datasets.py                  # Dataset registry (extensible)
 ├── prompts.py                   # Prompt templates
 ├── utils.py                     # Shared utilities
 ├── generate_counterfactuals.py  # Stage 1: Generate CFs
@@ -121,7 +121,6 @@ dpo/
 ├── train_dpo_lora.py            # Stage 4: DPO training
 ├── requirements.txt
 ├── data/                        # Downloaded datasets (gitignored)
-│   └── snli/
 └── results/                     # Output files (gitignored)
     ├── counterfactuals/
     └── dpo_pairs/
@@ -136,6 +135,8 @@ dpo/
 
 ### Adding a New Dataset
 
+The pipeline is designed to be extensible to any classification task:
+
 1. Add a new class in `datasets.py` extending `BaseDataset`:
 
 ```python
@@ -143,19 +144,19 @@ dpo/
 class MyNewDataset(BaseDataset):
     name = "my_dataset"
     labels = ["label1", "label2", "label3"]
-    edit_target = "text"  # What to edit
+    edit_target = "text"  # Field name to edit
     
     def load(self, data_dir: str, split: str = "train") -> list[dict]:
-        # Load and return entries
+        # Load and return entries as list of dicts
         ...
     
     def format_for_prompt(self, entry: dict) -> dict:
-        # Format for prompt generation
+        # Format entry for prompt generation
         ...
 ```
 
-2. Add prompt templates in `prompts.py`
-3. Add to `Config.ACTIVE_DATASETS`
+2. Add prompt templates in `prompts.py` (register in `PROMPT_REGISTRY`)
+3. Add dataset name to `Config.ACTIVE_DATASETS`
 
 ## DPO Pair Selection Logic
 
@@ -163,7 +164,7 @@ The pipeline selects **contrastive** pairs to maximize learning signal:
 
 | | Chosen (Good) | Rejected (Bad) |
 |---|---|---|
-| Label flip | ✓ Correct | ✗ Failed |
+| Label change | ✓ Correct | ✗ Failed |
 | Confidence | High | High (overconfident) |
 | Similarity | High (minimal edits) | Low (excessive changes) |
 
@@ -177,4 +178,3 @@ The pipeline selects **contrastive** pairs to maximize learning signal:
 ## License
 
 MIT
-
