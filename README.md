@@ -112,7 +112,7 @@ python train_dpo_lora.py \
 ```
 dpo/
 ├── config.py                    # Central configuration
-├── datasets.py                  # Dataset registry (extensible)
+├── dataset_registry.py          # Dataset registry (extensible)
 ├── prompts.py                   # Prompt templates
 ├── utils.py                     # Shared utilities
 ├── generate_counterfactuals.py  # Stage 1: Generate CFs
@@ -137,7 +137,7 @@ dpo/
 
 The pipeline is designed to be extensible to any classification task:
 
-1. Add a new class in `datasets.py` extending `BaseDataset`:
+1. Add a new class in `dataset_registry.py` extending `BaseDataset`:
 
 ```python
 @register_dataset

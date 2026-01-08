@@ -12,7 +12,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from config import Config
-from datasets import get_dataset
+from dataset_registry import get_dataset
 from prompts import get_generation_prompt, format_chat_messages
 from utils import (
     parse_edit_tag,
