@@ -1,6 +1,7 @@
-# Data and results directories
+# Data, results, and logs directories
 data/
 results/
+logs/
 
 # Model cache
 model_cache/
