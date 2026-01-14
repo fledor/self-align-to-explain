@@ -4,13 +4,14 @@ Dataset loading and registry for the Counterfactual DPO Training Pipeline.
 Provides an extensible interface for loading different datasets.
 """
 
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from datasets import load_dataset
 
-from utils import save_jsonl, load_jsonl
+from utils import save_jsonl, load_jsonl, normalize_label
 
 
 # =============================================================================
@@ -61,7 +62,7 @@ class BaseDataset(ABC):
     # Class attributes to be defined by subclasses
     name: str  # Unique identifier for the dataset
     labels: list[str]  # List of possible labels
-    edit_target: str  # What to edit: "premise", "hypothesis", "text", etc.
+    edit_target: str  # What to edit: "premise", "hypothesis", "passage", etc.
     
     @abstractmethod
     def load(self, data_dir: str, split: str = "train") -> list[dict]:
@@ -90,9 +91,64 @@ class BaseDataset(ABC):
         """
         pass
     
+    @abstractmethod
+    def get_original_text(self, entry: dict) -> str:
+        """
+        Get the original text that will be edited for counterfactuals.
+        
+        Args:
+            entry: A dataset entry
+            
+        Returns:
+            The text to be edited
+        """
+        pass
+    
+    @abstractmethod
+    def get_verification_inputs(self, entry: dict, edited_text: str) -> dict:
+        """
+        Get inputs needed for verification prompt.
+        
+        Args:
+            entry: Original dataset entry
+            edited_text: The edited counterfactual text
+            
+        Returns:
+            Dictionary with inputs for verification (dataset-specific)
+        """
+        pass
+    
+    @abstractmethod
+    def parse_label_from_response(self, response: str) -> Optional[str]:
+        """
+        Parse the predicted label from LLM verification response.
+        
+        Args:
+            response: The LLM's response string
+            
+        Returns:
+            Parsed label string, or None if parsing failed
+        """
+        pass
+    
+    @abstractmethod
+    def build_result_entry(self, entry: dict, counterfactuals: list[dict]) -> dict:
+        """
+        Build the result entry with counterfactuals for saving.
+        
+        Args:
+            entry: Original dataset entry
+            counterfactuals: List of generated counterfactuals
+            
+        Returns:
+            Dictionary to save to progress file
+        """
+        pass
+    
     def get_alternative_labels(self, current_label: str) -> list[str]:
         """Get all labels except the current one."""
-        return [l for l in self.labels if l != current_label]
+        current_normalized = normalize_label(current_label)
+        return [l for l in self.labels if normalize_label(l) != current_normalized]
 
 
 # =============================================================================
@@ -164,6 +220,28 @@ class SNLIBaseDataset(BaseDataset):
             entry["edit_target"] = self.edit_target
         
         return entries
+    
+    def parse_label_from_response(self, response: str) -> Optional[str]:
+        """Parse NLI label from verification response."""
+        response_lower = response.lower().strip()
+        
+        for label in self.labels:
+            if label in response_lower:
+                return label
+        
+        return None
+    
+    def build_result_entry(self, entry: dict, counterfactuals: list[dict]) -> dict:
+        """Build result entry for SNLI datasets."""
+        return {
+            "idx": entry["idx"],
+            "premise": entry["premise"],
+            "hypothesis": entry["hypothesis"],
+            "original_label": entry["label"],
+            "edit_target": entry["edit_target"],
+            "dataset_name": self.name,
+            "counterfactuals": counterfactuals,
+        }
 
 
 # =============================================================================
@@ -196,6 +274,17 @@ class SNLIPremiseDataset(SNLIBaseDataset):
             "text_to_edit": entry["premise"],
             "fixed_text": entry["hypothesis"],
         }
+    
+    def get_original_text(self, entry: dict) -> str:
+        """Get the premise (text to be edited)."""
+        return entry["premise"]
+    
+    def get_verification_inputs(self, entry: dict, edited_text: str) -> dict:
+        """Get inputs for NLI verification with edited premise."""
+        return {
+            "premise": edited_text,
+            "hypothesis": entry["hypothesis"],
+        }
 
 
 # =============================================================================
@@ -227,6 +316,135 @@ class SNLIHypothesisDataset(SNLIBaseDataset):
             "label": entry["label"],
             "text_to_edit": entry["hypothesis"],
             "fixed_text": entry["premise"],
+        }
+    
+    def get_original_text(self, entry: dict) -> str:
+        """Get the hypothesis (text to be edited)."""
+        return entry["hypothesis"]
+    
+    def get_verification_inputs(self, entry: dict, edited_text: str) -> dict:
+        """Get inputs for NLI verification with edited hypothesis."""
+        return {
+            "premise": entry["premise"],
+            "hypothesis": edited_text,
+        }
+
+
+# =============================================================================
+# BoolQ Dataset
+# =============================================================================
+
+@register_dataset
+class BoolQDataset(BaseDataset):
+    """BoolQ yes/no question answering dataset."""
+    
+    name: str = "boolq"
+    labels: list[str] = ["true", "false"]
+    edit_target: str = "passage"
+    _hf_dataset_name: str = "google/boolq"
+    
+    def _get_cache_path(self, data_dir: str, split: str) -> Path:
+        """Get the path to the cached JSONL file."""
+        return Path(data_dir) / "boolq" / f"{split}.jsonl"
+    
+    def _download_and_cache(self, data_dir: str, split: str) -> list[dict]:
+        """Download BoolQ from HuggingFace and cache locally."""
+        cache_path = self._get_cache_path(data_dir, split)
+        
+        print(f"Downloading BoolQ {split} split from HuggingFace...")
+        dataset = load_dataset(self._hf_dataset_name, split=split)
+        
+        entries = []
+        for idx, item in enumerate(dataset):
+            entries.append({
+                "idx": idx,
+                "passage": item["passage"],
+                "question": item["question"],
+                "label": "true" if item["answer"] else "false",
+            })
+        
+        # Save to cache
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        save_jsonl(entries, str(cache_path))
+        print(f"Cached {len(entries)} entries to {cache_path}")
+        
+        return entries
+    
+    def load(self, data_dir: str, split: str = "train") -> list[dict]:
+        """
+        Load BoolQ dataset, downloading and caching if necessary.
+        
+        Args:
+            data_dir: Directory to cache downloaded data
+            split: Dataset split to load
+            
+        Returns:
+            List of dataset entries
+        """
+        cache_path = self._get_cache_path(data_dir, split)
+        
+        if cache_path.exists():
+            print(f"Loading BoolQ {split} from cache: {cache_path}")
+            entries = load_jsonl(str(cache_path))
+        else:
+            entries = self._download_and_cache(data_dir, split)
+        
+        # Add dataset-specific metadata
+        for entry in entries:
+            entry["dataset_name"] = self.name
+            entry["edit_target"] = self.edit_target
+        
+        return entries
+    
+    def format_for_prompt(self, entry: dict) -> dict:
+        """
+        Format entry for passage editing prompt.
+        
+        Returns:
+            Dictionary with:
+                - passage: The text to edit
+                - question: The yes/no question
+                - label: Current answer (true/false)
+        """
+        return {
+            "passage": entry["passage"],
+            "question": entry["question"],
+            "label": entry["label"],
+        }
+    
+    def get_original_text(self, entry: dict) -> str:
+        """Get the passage (text to be edited)."""
+        return entry["passage"]
+    
+    def get_verification_inputs(self, entry: dict, edited_text: str) -> dict:
+        """Get inputs for yes/no verification with edited passage."""
+        return {
+            "passage": edited_text,
+            "question": entry["question"],
+        }
+    
+    def parse_label_from_response(self, response: str) -> Optional[str]:
+        """Parse yes/no label from verification response."""
+        response_lower = response.lower().strip()
+        
+        # Check for explicit true/false
+        if "true" in response_lower or "yes" in response_lower:
+            return "true"
+        if "false" in response_lower or "no" in response_lower:
+            return "false"
+        
+        return None
+    
+    def build_result_entry(self, entry: dict, counterfactuals: list[dict]) -> dict:
+        """Build result entry for BoolQ dataset."""
+        return {
+            "idx": entry["idx"],
+            "passage": entry["passage"],
+            "question": entry["question"],
+            "original_label": entry["label"],
+            "edit_target": entry["edit_target"],
+            "dataset_name": self.name,
+            "counterfactuals": counterfactuals,
         }
 
 

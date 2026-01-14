@@ -139,12 +139,21 @@ def format_prompt_for_dpo(
     """
     dataset_name = entry["dataset_name"]
     
-    # Create a formatted entry dict for the prompt function
-    formatted_entry = {
-        "premise": entry["premise"],
-        "hypothesis": entry["hypothesis"],
-        "label": entry["original_label"],
-    }
+    # Create a formatted entry dict for the prompt function based on dataset type
+    if dataset_name.startswith("snli"):
+        formatted_entry = {
+            "premise": entry["premise"],
+            "hypothesis": entry["hypothesis"],
+            "label": entry["original_label"],
+        }
+    elif dataset_name == "boolq":
+        formatted_entry = {
+            "passage": entry["passage"],
+            "question": entry["question"],
+            "label": entry["original_label"],
+        }
+    else:
+        raise ValueError(f"Unknown dataset type: {dataset_name}")
     
     system_prompt, user_prompt = get_generation_prompt(
         dataset_name=dataset_name,

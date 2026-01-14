@@ -224,16 +224,8 @@ def process_entry(
             "parse_success": edited_text is not None,
         })
     
-    # Build result
-    result = {
-        "idx": entry["idx"],
-        "premise": entry["premise"],
-        "hypothesis": entry["hypothesis"],
-        "original_label": entry["label"],
-        "edit_target": entry["edit_target"],
-        "dataset_name": dataset_name,
-        "counterfactuals": counterfactuals,
-    }
+    # Build result using dataset-specific method
+    result = dataset.build_result_entry(entry, counterfactuals)
     
     return result
 

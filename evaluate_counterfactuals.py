@@ -17,6 +17,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from config import Config
+from dataset_registry import get_dataset
 from prompts import get_verification_prompt, format_chat_messages
 from utils import load_jsonl, save_jsonl, normalize_label, parse_confidence
 
@@ -93,27 +94,26 @@ def load_semantic_model(model_name: str) -> SentenceTransformer:
 def verify_label(
     model,
     tokenizer,
-    premise: str,
-    hypothesis: str,
+    verification_inputs: dict,
     dataset_name: str,
+    dataset,
 ) -> tuple[str, float]:
     """
-    Verify the NLI label using the LLM.
+    Verify the label using the LLM.
     
     Args:
         model: The language model
         tokenizer: The tokenizer
-        premise: The premise text
-        hypothesis: The hypothesis text
+        verification_inputs: Dataset-specific inputs for verification prompt
         dataset_name: Name of the dataset
+        dataset: The dataset object (for label parsing)
         
     Returns:
         Tuple of (predicted_label, confidence)
     """
     system_prompt, user_prompt = get_verification_prompt(
         dataset_name=dataset_name,
-        premise=premise,
-        hypothesis=hypothesis,
+        **verification_inputs,
     )
     messages = format_chat_messages(system_prompt, user_prompt)
     
@@ -139,15 +139,8 @@ def verify_label(
     
     response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
     
-    # Parse the response for label and confidence
-    response_lower = response.lower().strip()
-    
-    # Extract label
-    predicted_label = None
-    for label in ["entailment", "contradiction", "neutral"]:
-        if label in response_lower:
-            predicted_label = label
-            break
+    # Use dataset-specific label parsing
+    predicted_label = dataset.parse_label_from_response(response)
     
     # Extract confidence
     confidence = parse_confidence(response)
@@ -200,6 +193,7 @@ def evaluate_entry(
     model,
     tokenizer,
     semantic_model: SentenceTransformer,
+    dataset,
 ) -> dict:
     """
     Evaluate all counterfactuals for a single entry.
@@ -209,20 +203,15 @@ def evaluate_entry(
         model: Verification model
         tokenizer: Tokenizer
         semantic_model: Sentence transformer model
+        dataset: The dataset object (for dataset-specific operations)
         
     Returns:
         Entry with evaluation scores added
     """
     dataset_name = entry["dataset_name"]
-    edit_target = entry["edit_target"]
     
-    # Determine which text was edited
-    if edit_target == "premise":
-        original_text = entry["premise"]
-        fixed_text = entry["hypothesis"]
-    else:  # hypothesis
-        original_text = entry["hypothesis"]
-        fixed_text = entry["premise"]
+    # Get original text using dataset method
+    original_text = dataset.get_original_text(entry)
     
     # Collect texts for batch semantic similarity
     edited_texts = []
@@ -234,6 +223,7 @@ def evaluate_entry(
             valid_indices.append(i)
     
     # Compute semantic similarities in batch
+    similarities = []
     if edited_texts:
         original_texts = [original_text] * len(edited_texts)
         similarities = compute_semantic_similarity(
@@ -255,21 +245,16 @@ def evaluate_entry(
             cf["rejected_score"] = 0.0
             continue
         
-        # Get the premise and hypothesis for verification
-        if edit_target == "premise":
-            verify_premise = cf["edited_text"]
-            verify_hypothesis = fixed_text
-        else:
-            verify_premise = fixed_text
-            verify_hypothesis = cf["edited_text"]
+        # Get verification inputs using dataset method
+        verification_inputs = dataset.get_verification_inputs(entry, cf["edited_text"])
         
         # Verify label
         predicted_label, confidence = verify_label(
             model=model,
             tokenizer=tokenizer,
-            premise=verify_premise,
-            hypothesis=verify_hypothesis,
+            verification_inputs=verification_inputs,
             dataset_name=dataset_name,
+            dataset=dataset,
         )
         
         # Check correctness
@@ -328,6 +313,9 @@ def main():
     for dataset_name in args.datasets:
         print(f"\nEvaluating: {dataset_name}")
         
+        # Get dataset object for dataset-specific operations
+        dataset = get_dataset(dataset_name)
+        
         # Find input file
         input_file = Path(args.input_dir) / f"{dataset_name}_progress.jsonl"
         if not input_file.exists():
@@ -346,6 +334,7 @@ def main():
                 model=model,
                 tokenizer=tokenizer,
                 semantic_model=semantic_model,
+                dataset=dataset,
             )
             evaluated_entries.append(evaluated_entry)
         

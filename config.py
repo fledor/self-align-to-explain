@@ -24,7 +24,7 @@ class Config:
     # ==========================================================================
     # Dataset Settings
     # ==========================================================================
-    # Available: "snli_premise", "snli_hypothesis"
+    # Available: "snli_premise", "snli_hypothesis", "boolq"
     # Add more dataset names here as they are implemented
     ACTIVE_DATASETS: list = ["snli_premise", "snli_hypothesis"]
     
