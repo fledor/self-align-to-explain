@@ -1,14 +1,19 @@
 """
 DPO Pair Construction Script.
 
-Constructs preference pairs from evaluated counterfactuals:
-- Chosen: Correct label flip + high confidence + high similarity (minimal edits)
-- Rejected: Failed label flip + high confidence + low similarity (excessive changes)
+Constructs preference pairs from evaluated counterfactuals using unified ranking:
+- All CFs are ranked by a unified score (correctness heavily weighted)
+- Chosen: Top N from unified ranking (best quality)
+- Rejected: Bottom N from unified ranking (worst quality)
+
+Unified Score = correctness_bonus + (confidence × similarity)
+Where correctness_bonus = 100 if label flip succeeded, 0 otherwise.
+This ensures correct CFs always rank above incorrect ones.
 """
 
 import argparse
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -71,54 +76,71 @@ def get_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def select_chosen_candidates(counterfactuals: list[dict], count: int) -> list[dict]:
+def compute_unified_score(cf: dict) -> float:
     """
-    Select the best counterfactuals as "chosen" candidates.
+    Compute unified quality score with hard weighting on correctness.
     
-    Chosen = correct label flip + high confidence + high similarity
+    Correct CFs always rank above incorrect CFs due to the large correctness bonus.
+    Within each group, ranking is by quality (confidence × similarity).
+    
+    Args:
+        cf: Counterfactual dict with evaluation results
+        
+    Returns:
+        Unified score (higher = better)
+    """
+    CORRECTNESS_WEIGHT = 100  # Ensures correct CFs always rank above incorrect
+    
+    correct_bonus = CORRECTNESS_WEIGHT if cf.get("is_correct", False) else 0
+    quality = cf.get("confidence", 0) * cf.get("semantic_similarity", 0)
+    
+    return correct_bonus + quality
+
+
+def select_dpo_candidates(
+    counterfactuals: list[dict],
+    chosen_count: int,
+    rejected_count: int,
+) -> Tuple[list[dict], list[dict]]:
+    """
+    Select chosen and rejected candidates using unified ranking.
+    
+    All CFs are ranked by unified score. Top N become "chosen", bottom N become "rejected".
+    This approach:
+    - Always produces pairs even if all CFs succeed or all fail
+    - Captures quality gradients within correctness groups
+    - Uses hard weighting so correct CFs always rank above incorrect
     
     Args:
         counterfactuals: List of evaluated counterfactuals
-        count: Number to select
+        chosen_count: Number of top CFs to select as "chosen"
+        rejected_count: Number of bottom CFs to select as "rejected"
         
     Returns:
-        List of selected counterfactuals
+        Tuple of (chosen_cfs, rejected_cfs)
     """
-    # Filter to correct counterfactuals with valid edits
-    correct_cfs = [
+    # Filter to CFs with valid edits
+    valid_cfs = [
         cf for cf in counterfactuals
-        if cf.get("is_correct", False) and cf.get("edited_text") is not None
+        if cf.get("edited_text") is not None
     ]
     
-    # Sort by chosen_score (confidence × similarity) descending
-    correct_cfs.sort(key=lambda x: x.get("chosen_score", 0), reverse=True)
+    if len(valid_cfs) < chosen_count + rejected_count:
+        # Not enough CFs to form distinct chosen/rejected sets
+        return [], []
     
-    return correct_cfs[:count]
-
-
-def select_rejected_candidates(counterfactuals: list[dict], count: int) -> list[dict]:
-    """
-    Select the worst counterfactuals as "rejected" candidates.
+    # Sort by unified score (descending)
+    valid_cfs.sort(key=compute_unified_score, reverse=True)
     
-    Rejected = failed label flip + high confidence + low similarity
+    # Top N = chosen, Bottom N = rejected
+    chosen_cfs = valid_cfs[:chosen_count]
+    rejected_cfs = valid_cfs[-rejected_count:]
     
-    Args:
-        counterfactuals: List of evaluated counterfactuals
-        count: Number to select
-        
-    Returns:
-        List of selected counterfactuals
-    """
-    # Filter to incorrect counterfactuals with valid edits
-    incorrect_cfs = [
-        cf for cf in counterfactuals
-        if not cf.get("is_correct", True) and cf.get("edited_text") is not None
-    ]
+    # Store unified scores for metadata
+    for cf in chosen_cfs + rejected_cfs:
+        cf["unified_score"] = compute_unified_score(cf)
     
-    # Sort by rejected_score (confidence × (1 - similarity)) descending
-    incorrect_cfs.sort(key=lambda x: x.get("rejected_score", 0), reverse=True)
-    
-    return incorrect_cfs[:count]
+    return chosen_cfs, rejected_cfs
 
 
 def format_prompt_for_dpo(
@@ -185,12 +207,12 @@ def construct_pairs_for_entry(
     tokenizer: Optional[AutoTokenizer] = None,
 ) -> list[dict]:
     """
-    Construct DPO pairs for a single entry.
+    Construct DPO pairs for a single entry using unified ranking.
     
     Args:
         entry: Entry with evaluated counterfactuals
-        chosen_count: Number of chosen to select
-        rejected_count: Number of rejected to select
+        chosen_count: Number of top CFs to select as chosen
+        rejected_count: Number of bottom CFs to select as rejected
         tokenizer: Tokenizer for chat template formatting
         
     Returns:
@@ -198,9 +220,10 @@ def construct_pairs_for_entry(
     """
     counterfactuals = entry["counterfactuals"]
     
-    # Select candidates
-    chosen_cfs = select_chosen_candidates(counterfactuals, chosen_count)
-    rejected_cfs = select_rejected_candidates(counterfactuals, rejected_count)
+    # Select candidates using unified ranking
+    chosen_cfs, rejected_cfs = select_dpo_candidates(
+        counterfactuals, chosen_count, rejected_count
+    )
     
     if not chosen_cfs or not rejected_cfs:
         return []
@@ -226,8 +249,10 @@ def construct_pairs_for_entry(
                     "original_label": entry["original_label"],
                     "chosen_target_label": chosen_cf["target_label"],
                     "rejected_target_label": rejected_cf["target_label"],
-                    "chosen_score": chosen_cf.get("chosen_score", 0),
-                    "rejected_score": rejected_cf.get("rejected_score", 0),
+                    "chosen_unified_score": chosen_cf.get("unified_score", 0),
+                    "rejected_unified_score": rejected_cf.get("unified_score", 0),
+                    "chosen_is_correct": chosen_cf.get("is_correct", False),
+                    "rejected_is_correct": rejected_cf.get("is_correct", False),
                     "chosen_similarity": chosen_cf.get("semantic_similarity", 0),
                     "rejected_similarity": rejected_cf.get("semantic_similarity", 0),
                     "chosen_confidence": chosen_cf.get("confidence", 0),

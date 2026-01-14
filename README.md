@@ -8,7 +8,7 @@ This pipeline implements a five-stage approach:
 
 1. **Generate** diverse counterfactuals using high-temperature sampling
 2. **Evaluate** counterfactuals on correctness, confidence, and semantic similarity
-3. **Construct** DPO preference pairs (good vs bad examples)
+3. **Construct** DPO preference pairs using unified ranking
 4. **Train** the model with DPO to produce better counterfactuals
 5. **Compare** base model vs DPO-tuned model (edit distance, LFR, perplexity)
 
@@ -19,45 +19,18 @@ This pipeline implements a five-stage approach:
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
                          │                  │                  │                  │                  │
                          ▼                  ▼                  ▼                  ▼                  ▼
-                   ~40 CFs/entry      correctness,       chosen vs         improved CF       Edit Dist,
-                   high temp          confidence,        rejected          model (LoRA)      LFR, PPL
+                   ~40 CFs/entry      correctness,       unified rank        improved CF       Edit Dist,
+                   high temp          confidence,        → chosen/reject     model (LoRA)      LFR, PPL
                                       similarity
 ```
 
-## Supported Datasets
+## Currently Implemented Datasets
+
+The pipeline is extensible to any classification task. The following datasets are currently implemented:
 
 - **boolq**: Edit passage to flip yes/no answer
 - **snli_premise**: Edit premise to change NLI relationship
 - **snli_hypothesis**: Edit hypothesis to change NLI relationship
-
-## Quick Start
-
-### SLURM (HPC)
-
-```bash
-# Test run (5 samples, ~30 min)
-sbatch run_test.sh
-
-# All datasets (10 samples each, ~1 hour)
-sbatch run_all_datasets.sh
-
-# Production run (50 samples, ~3 hours)
-sbatch run_50samples.sh
-```
-
-### Local
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run full pipeline
-python generate_counterfactuals.py --datasets boolq --max_entries 5
-python evaluate_counterfactuals.py --datasets boolq
-python construct_dpo_pairs.py --datasets boolq
-python train_dpo_lora.py --max_steps 50 --use_4bit
-python evaluate_models.py --num_samples 10
-```
 
 ## Pipeline Stages
 
@@ -66,7 +39,7 @@ python evaluate_models.py --num_samples 10
 ```bash
 python generate_counterfactuals.py \
     --datasets boolq snli_premise snli_hypothesis \
-    --max_entries 50 \
+    --max_entries 100 \
     --cfs_per_entry 40
 ```
 
@@ -84,7 +57,7 @@ python evaluate_counterfactuals.py \
 Evaluates each counterfactual on:
 - **Correctness**: Did the label change succeed? (verified via LLM)
 - **Confidence**: How confident is the model in the new label?
-- **Semantic Similarity**: How minimal were the edits?
+- **Semantic Similarity**: How minimal were the edits? (sentence embeddings)
 
 **Output:** `results/counterfactuals/{dataset}_evaluated.jsonl`
 
@@ -97,9 +70,7 @@ python construct_dpo_pairs.py \
     --rejected_count 2
 ```
 
-Selects contrastive pairs:
-- **Chosen**: Correct + confident + minimal edits
-- **Rejected**: Incorrect + overconfident + excessive edits
+Constructs preference pairs using **unified ranking** (see Design Choices below).
 
 **Output:** `results/dpo_pairs/dpo_training.jsonl`
 
@@ -109,7 +80,7 @@ Selects contrastive pairs:
 python train_dpo_lora.py \
     --dataset_path ./results/dpo_pairs/dpo_training.jsonl \
     --output_dir ./results/dpo_model \
-    --max_steps 100 \
+    --max_steps 200 \
     --use_4bit \
     --bf16 \
     --gradient_checkpointing
@@ -144,6 +115,45 @@ Compares base model vs DPO-tuned model on held-out validation data:
 - `results/evaluation/eval_report.md` - Human-readable comparison
 - `results/evaluation/eval_summary.json` - Structured metrics
 
+---
+
+## Design Choices
+
+### DPO Pair Selection: Unified Ranking
+
+We use **unified ranking with hard weighting** to select DPO pairs:
+
+```
+Unified Score = correctness_bonus + (confidence × similarity)
+
+where correctness_bonus = 100 if label flip succeeded, 0 otherwise
+```
+
+**How it works:**
+1. All counterfactuals are scored and ranked together
+2. Top N become **"chosen"** (best quality)
+3. Bottom N become **"rejected"** (worst quality)
+4. Each chosen is paired with each rejected → N×N pairs per entry
+5. Hard weighting (correctness_bonus=100) ensures correct CFs always rank above incorrect CFs, while still allowing quality differentiation within each group. The model learns "make the label flip work" (primary) and "make minimal edits" (secondary).
+
+### High-Temperature Sampling
+
+We generate diverse counterfactuals using high temperature:
+
+```python
+TEMPERATURE = 1.2
+TOP_P = 0.95
+TOP_K = 100
+```
+
+This produces varied outputs that we then filter and rank, rather than always taking the greedy best output.
+
+### Semantic Similarity
+
+We use `sentence-transformers/all-MiniLM-L6-v2` to compute semantic similarity between original and edited text. Higher similarity = more minimal edits.
+
+---
+
 ## Configuration
 
 All settings are centralized in `config.py`:
@@ -158,6 +168,10 @@ class Config:
     TEMPERATURE = 1.2
     TOP_P = 0.95
     TOP_K = 100
+    
+    # DPO pair selection
+    CHOSEN_COUNT = 2
+    REJECTED_COUNT = 2
 ```
 
 ## Project Structure
@@ -174,9 +188,10 @@ cfg-dpo/
 ├── train_dpo_lora.py            # Stage 4: DPO training
 ├── evaluate_models.py           # Stage 5: Model comparison
 ├── requirements.txt
-├── run_test.sh                  # SLURM: Quick test
-├── run_all_datasets.sh          # SLURM: All datasets
-├── run_50samples.sh             # SLURM: Production run
+├── run_test.sh                  # SLURM: Quick test (5 entries)
+├── run_boolq_100.sh             # SLURM: BoolQ (100 entries)
+├── run_snli_premise_100.sh      # SLURM: SNLI Premise (100 entries)
+├── run_snli_hypothesis_100.sh   # SLURM: SNLI Hypothesis (100 entries)
 ├── data/                        # Downloaded datasets (gitignored)
 └── results/                     # Output files (gitignored)
     ├── counterfactuals/
@@ -184,19 +199,6 @@ cfg-dpo/
     ├── dpo_model_*/
     └── evaluation/
 ```
-
-## DPO Pair Selection Logic
-
-The pipeline selects **contrastive** pairs to maximize learning signal:
-
-| | Chosen (Good) | Rejected (Bad) |
-|---|---|---|
-| Label change | Correct | Failed |
-| Confidence | High | High (overconfident) |
-| Similarity | High (minimal edits) | Low (excessive changes) |
-
-**Chosen score**: `confidence × similarity` (higher = better)  
-**Rejected score**: `confidence × (1 - similarity)` (higher = worse)
 
 ## Adding a New Dataset
 
@@ -218,6 +220,18 @@ class MyNewDataset(BaseDataset):
 ```
 
 2. Add prompt templates in `prompts.py` (register in `PROMPT_REGISTRY`)
+
+## Intermediate Results
+
+Results are saved after each stage, allowing pipeline resumption:
+
+| Stage | Output File | Description |
+|-------|-------------|-------------|
+| 1 | `{dataset}_progress.jsonl` | Raw generated CFs |
+| 2 | `{dataset}_evaluated.jsonl` | CFs with scores |
+| 3 | `dpo_training.jsonl` | Preference pairs |
+| 4 | `dpo_model/` | LoRA adapter |
+| 5 | `eval_report.md` | Comparison results |
 
 ## Environment Variables
 
