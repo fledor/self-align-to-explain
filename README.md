@@ -273,13 +273,7 @@ cfg-dpo/
 ├── train_dpo_lora.py            # Stage 4: DPO training
 ├── evaluate_models.py           # Stage 5: Model comparison
 ├── requirements.txt
-├── run_test.sh                  # SLURM: Quick test (3e5c)
-├── run_boolq_100.sh             # SLURM: BoolQ (100e40c)
-├── run_snli_premise_100.sh      # SLURM: SNLI Premise (100e40c)
-├── run_snli_hypothesis_100.sh   # SLURM: SNLI Hypothesis (100e40c)
-├── run_all_datasets.sh          # SLURM: All datasets combined (10e5c)
-├── run_50samples.sh             # SLURM: SNLI only (50e40c)
-├── data/                        # Downloaded datasets (gitignored)
+├── data/                        # Downloaded datasets
 └── results/                     # Output files (gitignored)
     ├── counterfactuals_{suffix}/
     ├── dpo_pairs_{dataset}_{suffix}/
