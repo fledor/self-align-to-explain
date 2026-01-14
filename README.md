@@ -40,18 +40,21 @@ The pipeline is extensible to any classification task. The following datasets ar
 python generate_counterfactuals.py \
     --datasets boolq snli_premise snli_hypothesis \
     --max_entries 100 \
-    --cfs_per_entry 40
+    --cfs_per_entry 40 \
+    --output_dir ./results/counterfactuals_100e40c
 ```
 
 Generates diverse counterfactuals using high-temperature sampling. Target labels are distributed evenly across the generated counterfactuals.
 
-**Output:** `results/counterfactuals/{dataset}_progress.jsonl`
+**Output:** `results/counterfactuals_{suffix}/{dataset}_progress.jsonl`
 
 ### Stage 2: Evaluate Counterfactuals
 
 ```bash
 python evaluate_counterfactuals.py \
-    --datasets boolq snli_premise snli_hypothesis
+    --datasets boolq snli_premise snli_hypothesis \
+    --input_dir ./results/counterfactuals_100e40c \
+    --output_dir ./results/counterfactuals_100e40c
 ```
 
 Evaluates each counterfactual on:
@@ -59,27 +62,31 @@ Evaluates each counterfactual on:
 - **Confidence**: How confident is the model in the new label?
 - **Semantic Similarity**: How minimal were the edits? (sentence embeddings)
 
-**Output:** `results/counterfactuals/{dataset}_evaluated.jsonl`
+**Output:** `results/counterfactuals_{suffix}/{dataset}_evaluated.jsonl`
 
 ### Stage 3: Construct DPO Pairs
 
 ```bash
 python construct_dpo_pairs.py \
-    --datasets boolq snli_premise snli_hypothesis \
+    --datasets boolq \
+    --input_dir ./results/counterfactuals_100e40c \
+    --output_dir ./results/dpo_pairs_boolq_100e40c \
     --chosen_count 2 \
     --rejected_count 2
 ```
 
 Constructs preference pairs using **unified ranking** (see Design Choices below).
 
-**Output:** `results/dpo_pairs/dpo_training.jsonl`
+**Output:**
+- `dpo_pairs.jsonl` - Minimal format for debugging/analysis
+- `dpo_training.jsonl` - Full format for TRL DPOTrainer
 
 ### Stage 4: Train with DPO
 
 ```bash
 python train_dpo_lora.py \
-    --dataset_path ./results/dpo_pairs/dpo_training.jsonl \
-    --output_dir ./results/dpo_model \
+    --dataset_path ./results/dpo_pairs_boolq_100e40c/dpo_training.jsonl \
+    --output_dir ./results/dpo_model_boolq_100e40c \
     --max_steps 200 \
     --use_4bit \
     --bf16 \
@@ -88,17 +95,18 @@ python train_dpo_lora.py \
 
 Fine-tunes the model using DPO with QLoRA (4-bit quantization).
 
-**Output:** `results/dpo_model/` (LoRA adapter)
+**Output:** `results/dpo_model_{dataset}_{suffix}/` (LoRA adapter)
 
 ### Stage 5: Evaluate Models
 
 ```bash
 python evaluate_models.py \
-    --dpo_model_path ./results/dpo_model \
-    --datasets boolq snli_premise snli_hypothesis \
+    --dpo_model_path ./results/dpo_model_boolq_100e40c \
+    --datasets boolq \
     --split validation \
     --num_samples 20 \
-    --cfs_per_entry 5
+    --cfs_per_entry 5 \
+    --output_dir ./results/evaluation_boolq_100e40c
 ```
 
 Compares base model vs DPO-tuned model on held-out validation data:
@@ -112,8 +120,39 @@ Compares base model vs DPO-tuned model on held-out validation data:
 **Note:** For SNLI datasets, the same entry indices are used for both `snli_premise` and `snli_hypothesis` to ensure fair comparison on identical NLI pairs.
 
 **Output:** 
-- `results/evaluation/eval_report.md` - Human-readable comparison
-- `results/evaluation/eval_summary.json` - Structured metrics
+- `results/evaluation_{dataset}_{suffix}/eval_report.md` - Human-readable comparison
+- `results/evaluation_{dataset}_{suffix}/eval_summary.json` - Structured metrics
+
+---
+
+## Output Directory Naming
+
+Output directories include a **suffix** based on the run configuration to prevent overwriting results:
+
+```
+SUFFIX = {entries}e{cfs}c
+
+Example: 100e40c = 100 entries, 40 counterfactuals each
+```
+
+This produces directory structures like:
+```
+results/
+├── counterfactuals_100e40c/          # Production run
+│   ├── boolq_progress.jsonl
+│   └── boolq_evaluated.jsonl
+├── counterfactuals_3e5c/             # Test run (won't overwrite production)
+├── dpo_pairs_boolq_100e40c/
+├── dpo_model_boolq_100e40c/
+└── evaluation_boolq_100e40c/
+```
+
+Run scripts define these at the top:
+```bash
+ENTRIES=100
+CFS=40
+SUFFIX="${ENTRIES}e${CFS}c"
+```
 
 ---
 
@@ -152,6 +191,48 @@ This produces varied outputs that we then filter and rank, rather than always ta
 
 We use `sentence-transformers/all-MiniLM-L6-v2` to compute semantic similarity between original and edited text. Higher similarity = more minimal edits.
 
+### Streamlined Data Storage
+
+We store only essential data to minimize file sizes:
+
+**Counterfactuals** (after evaluation):
+```json
+{
+  "edited_text": "The actual edited content",
+  "target_label": "entailment",
+  "parse_success": true,
+  "is_correct": true,
+  "predicted_label": "entailment",
+  "confidence": 0.95,
+  "semantic_similarity": 0.87
+}
+```
+
+**DPO Pairs** (`dpo_pairs.jsonl` - minimal, for debugging):
+```json
+{
+  "entry_idx": 0,
+  "dataset_name": "boolq",
+  "original_label": "true",
+  "chosen_text": "Edited text without tags",
+  "rejected_text": "Edited text without tags",
+  "chosen_target_label": "false",
+  "chosen_unified_score": 100.85,
+  "chosen_is_correct": true
+}
+```
+
+**DPO Training** (`dpo_training.jsonl` - for TRL DPOTrainer):
+```json
+{
+  "prompt": "<|im_start|>system...",
+  "chosen": "Edited text without tags",
+  "rejected": "Edited text without tags"
+}
+```
+
+Note: Chosen/rejected responses are stored as plain text (edit tags removed) since the model should learn to produce the content directly.
+
 ---
 
 ## Configuration
@@ -188,16 +269,18 @@ cfg-dpo/
 ├── train_dpo_lora.py            # Stage 4: DPO training
 ├── evaluate_models.py           # Stage 5: Model comparison
 ├── requirements.txt
-├── run_test.sh                  # SLURM: Quick test (5 entries)
-├── run_boolq_100.sh             # SLURM: BoolQ (100 entries)
-├── run_snli_premise_100.sh      # SLURM: SNLI Premise (100 entries)
-├── run_snli_hypothesis_100.sh   # SLURM: SNLI Hypothesis (100 entries)
+├── run_test.sh                  # SLURM: Quick test (3e5c)
+├── run_boolq_100.sh             # SLURM: BoolQ (100e40c)
+├── run_snli_premise_100.sh      # SLURM: SNLI Premise (100e40c)
+├── run_snli_hypothesis_100.sh   # SLURM: SNLI Hypothesis (100e40c)
+├── run_all_datasets.sh          # SLURM: All datasets combined (10e5c)
+├── run_50samples.sh             # SLURM: SNLI only (50e40c)
 ├── data/                        # Downloaded datasets (gitignored)
 └── results/                     # Output files (gitignored)
-    ├── counterfactuals/
-    ├── dpo_pairs/
-    ├── dpo_model_*/
-    └── evaluation/
+    ├── counterfactuals_{suffix}/
+    ├── dpo_pairs_{dataset}_{suffix}/
+    ├── dpo_model_{dataset}_{suffix}/
+    └── evaluation_{dataset}_{suffix}/
 ```
 
 ## Adding a New Dataset
@@ -227,11 +310,13 @@ Results are saved after each stage, allowing pipeline resumption:
 
 | Stage | Output File | Description |
 |-------|-------------|-------------|
-| 1 | `{dataset}_progress.jsonl` | Raw generated CFs |
-| 2 | `{dataset}_evaluated.jsonl` | CFs with scores |
-| 3 | `dpo_training.jsonl` | Preference pairs |
-| 4 | `dpo_model/` | LoRA adapter |
-| 5 | `eval_report.md` | Comparison results |
+| 1 | `counterfactuals_{suffix}/{dataset}_progress.jsonl` | Raw generated CFs |
+| 2 | `counterfactuals_{suffix}/{dataset}_evaluated.jsonl` | CFs with evaluation scores |
+| 3 | `dpo_pairs_{dataset}_{suffix}/dpo_pairs.jsonl` | Minimal pairs for debugging |
+| 3 | `dpo_pairs_{dataset}_{suffix}/dpo_training.jsonl` | Full format for training |
+| 4 | `dpo_model_{dataset}_{suffix}/` | LoRA adapter weights |
+| 5 | `evaluation_{dataset}_{suffix}/eval_report.md` | Human-readable comparison |
+| 5 | `evaluation_{dataset}_{suffix}/eval_summary.json` | Structured metrics |
 
 ## Environment Variables
 

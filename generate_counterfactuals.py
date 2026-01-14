@@ -220,7 +220,6 @@ def process_entry(
         counterfactuals.append({
             "edited_text": edited_text,
             "target_label": target_label,
-            "raw_response": response,
             "parse_success": edited_text is not None,
         })
     

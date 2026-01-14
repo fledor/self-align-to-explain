@@ -237,28 +237,37 @@ def construct_pairs_for_entry(
             # This ensures the prompt matches the chosen response
             prompt = format_prompt_for_dpo(entry, chosen_cf["target_label"], tokenizer)
             
+            # Use edited_text (extracted content without edit tags)
+            chosen_text = chosen_cf["edited_text"]
+            rejected_text = rejected_cf["edited_text"]
+            
+            # Build minimal pair for dpo_pairs.jsonl (debugging/analysis)
             pair = {
-                "prompt": prompt,
-                "chosen": chosen_cf["raw_response"],
-                "rejected": rejected_cf["raw_response"],
-                # Metadata for analysis
-                "metadata": {
-                    "entry_idx": entry["idx"],
-                    "dataset_name": entry["dataset_name"],
-                    "edit_target": entry["edit_target"],
-                    "original_label": entry["original_label"],
-                    "chosen_target_label": chosen_cf["target_label"],
-                    "rejected_target_label": rejected_cf["target_label"],
-                    "chosen_unified_score": chosen_cf.get("unified_score", 0),
-                    "rejected_unified_score": rejected_cf.get("unified_score", 0),
-                    "chosen_is_correct": chosen_cf.get("is_correct", False),
-                    "rejected_is_correct": rejected_cf.get("is_correct", False),
-                    "chosen_similarity": chosen_cf.get("semantic_similarity", 0),
-                    "rejected_similarity": rejected_cf.get("semantic_similarity", 0),
-                    "chosen_confidence": chosen_cf.get("confidence", 0),
-                    "rejected_confidence": rejected_cf.get("confidence", 0),
-                },
+                "entry_idx": entry["idx"],
+                "dataset_name": entry["dataset_name"],
+                "original_label": entry["original_label"],
+                "chosen_text": chosen_text,
+                "rejected_text": rejected_text,
+                "chosen_target_label": chosen_cf["target_label"],
+                "rejected_target_label": rejected_cf["target_label"],
+                "chosen_unified_score": chosen_cf.get("unified_score", 0),
+                "rejected_unified_score": rejected_cf.get("unified_score", 0),
+                "chosen_is_correct": chosen_cf.get("is_correct", False),
+                "rejected_is_correct": rejected_cf.get("is_correct", False),
+                # Include source text fields for context
             }
+            
+            # Add dataset-specific source fields
+            if entry["dataset_name"].startswith("snli"):
+                pair["premise"] = entry["premise"]
+                pair["hypothesis"] = entry["hypothesis"]
+            elif entry["dataset_name"] == "boolq":
+                pair["passage"] = entry["passage"]
+                pair["question"] = entry["question"]
+            
+            # Store full prompt for training file generation
+            pair["_prompt"] = prompt
+            
             pairs.append(pair)
     
     return pairs
@@ -343,14 +352,23 @@ def main():
     
     # Save combined dataset
     if all_pairs:
-        # Save as JSONL (for training)
+        # Save minimal format to dpo_pairs.jsonl (for debugging/analysis)
+        # Remove internal _prompt field before saving
+        minimal_pairs = [
+            {k: v for k, v in p.items() if not k.startswith("_")}
+            for p in all_pairs
+        ]
         output_file = Path(args.output_dir) / "dpo_pairs.jsonl"
-        save_jsonl(all_pairs, str(output_file))
-        print(f"\nSaved {len(all_pairs)} pairs to: {output_file}")
+        save_jsonl(minimal_pairs, str(output_file))
+        print(f"\nSaved {len(minimal_pairs)} minimal pairs to: {output_file}")
         
-        # Also save without metadata for cleaner training format
+        # Save full format to dpo_training.jsonl (for TRL DPOTrainer)
         training_pairs = [
-            {"prompt": p["prompt"], "chosen": p["chosen"], "rejected": p["rejected"]}
+            {
+                "prompt": p["_prompt"],
+                "chosen": p["chosen_text"],
+                "rejected": p["rejected_text"],
+            }
             for p in all_pairs
         ]
         training_file = Path(args.output_dir) / "dpo_training.jsonl"

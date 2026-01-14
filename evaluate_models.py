@@ -339,7 +339,6 @@ def evaluate_model(
                 
                 cf_result = {
                     "target_label": target_label,
-                    "raw_response": response,
                     "edited_text": edited_text,
                     "parse_success": edited_text is not None,
                 }

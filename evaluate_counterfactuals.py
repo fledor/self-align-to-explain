@@ -241,8 +241,6 @@ def evaluate_entry(
             cf["predicted_label"] = None
             cf["confidence"] = 0.0
             cf["semantic_similarity"] = 0.0
-            cf["chosen_score"] = 0.0
-            cf["rejected_score"] = 0.0
             continue
         
         # Get verification inputs using dataset method
@@ -268,23 +266,11 @@ def evaluate_entry(
         semantic_similarity = similarities[sim_idx]
         sim_idx += 1
         
-        # Compute scores for pair selection
-        # Chosen score: higher is better (correct, confident, minimal)
-        # Rejected score: higher means worse (confident failure with excessive changes)
-        if is_correct:
-            chosen_score = confidence * semantic_similarity
-            rejected_score = 0.0  # Correct CFs don't contribute to rejected
-        else:
-            chosen_score = 0.0  # Incorrect CFs don't contribute to chosen
-            rejected_score = confidence * (1 - semantic_similarity)
-        
         # Update counterfactual with evaluation
         cf["is_correct"] = is_correct
         cf["predicted_label"] = predicted_label
         cf["confidence"] = confidence
         cf["semantic_similarity"] = semantic_similarity
-        cf["chosen_score"] = chosen_score
-        cf["rejected_score"] = rejected_score
     
     return entry
 
