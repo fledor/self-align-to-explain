@@ -24,9 +24,13 @@ accelerate>=0.28.0
 scipy>=1.11.0
 sentencepiece>=0.1.99
 tqdm>=4.66.0
+soxr>=0.3.0  # Required by transformers for audio utilities
 
 # Semantic similarity for counterfactual evaluation
 sentence-transformers>=2.2.0
+
+# Evaluation metrics
+python-Levenshtein>=0.21.0  # Fast edit distance computation
 
 # Optional: For logging and monitoring
 # wandb>=0.16.0
