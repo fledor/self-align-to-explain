@@ -6,8 +6,10 @@ temperature sampling to ensure variety.
 """
 
 import argparse
+import random
 from typing import Optional
 
+import torch
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -195,6 +197,12 @@ def process_entry(
         # Distribute target labels evenly
         target_label = target_labels[i % len(target_labels)]
         
+        # Set unique random seed for each generation to encourage diversity
+        seed = random.randint(0, 2**32 - 1)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        
         # Get the prompt
         system_prompt, user_prompt = get_generation_prompt(
             dataset_name=dataset_name,
@@ -222,6 +230,18 @@ def process_entry(
             "target_label": target_label,
             "parse_success": edited_text is not None,
         })
+    
+    # Filter out failed parses and deduplicate by edited_text
+    seen_texts = set()
+    unique_counterfactuals = []
+    for cf in counterfactuals:
+        text = cf.get("edited_text")
+        # Skip failed parses (None) and duplicates
+        if text is not None and text not in seen_texts:
+            unique_counterfactuals.append(cf)
+            seen_texts.add(text)
+    
+    counterfactuals = unique_counterfactuals
     
     # Build result using dataset-specific method
     result = dataset.build_result_entry(entry, counterfactuals)
