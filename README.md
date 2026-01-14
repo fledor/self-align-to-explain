@@ -138,10 +138,9 @@ Example: 100e40c = 100 entries, 40 counterfactuals each
 This produces directory structures like:
 ```
 results/
-├── counterfactuals_100e40c/          # Production run
+├── counterfactuals_100e40c/
 │   ├── boolq_progress.jsonl
 │   └── boolq_evaluated.jsonl
-├── counterfactuals_3e5c/             # Test run (won't overwrite production)
 ├── dpo_pairs_boolq_100e40c/
 ├── dpo_model_boolq_100e40c/
 └── evaluation_boolq_100e40c/
@@ -175,9 +174,9 @@ where correctness_bonus = 100 if label flip succeeded, 0 otherwise
 4. Each chosen is paired with each rejected → N×N pairs per entry
 5. Hard weighting (correctness_bonus=100) ensures correct CFs always rank above incorrect CFs, while still allowing quality differentiation within each group. The model learns "make the label flip work" (primary) and "make minimal edits" (secondary).
 
-### High-Temperature Sampling
+### Diverse Generation with Deduplication
 
-We generate diverse counterfactuals using high temperature:
+We generate diverse counterfactuals using high temperature and seed variation:
 
 ```python
 TEMPERATURE = 1.2
@@ -185,7 +184,12 @@ TOP_P = 0.95
 TOP_K = 100
 ```
 
-This produces varied outputs that we then filter and rank, rather than always taking the greedy best output.
+**Diversity mechanisms:**
+1. **Unique random seed per generation** - Each CF generation uses a fresh `torch.manual_seed()` to maximize output variety
+2. **Post-generation deduplication** - Duplicate `edited_text` values are removed, keeping only unique CFs
+3. **Failed parse filtering** - CFs that fail to parse are removed. The model is prompted to wrap its edited text in `<edit>...</edit>` tags; responses without valid tags are discarded.
+
+This means the actual CF count per entry may be less than requested if duplicates or parse failures occur. The tradeoff is that all saved CFs are unique and usable for DPO training.
 
 ### Semantic Similarity
 
