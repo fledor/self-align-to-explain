@@ -1,11 +1,19 @@
 """
 Model Evaluation Script.
 
-Compares base model vs DPO-tuned model on counterfactual generation quality:
+Compares base model vs DPO-tuned model on counterfactual generation quality.
+
+Key design choices:
+- LFR is computed by comparing CF labels to the BASE model's original prediction
+  (not ground truth) - this measures "did the edit change the model's mind?"
+- BASE model is the judge for ALL CFs (both base-generated and DPO-generated)
+  to ensure fair comparison
+- Supports deduplication, progressive saves, and resume capability
+
+Metrics:
+- Label Flip Rate (LFR): % of CFs that change the model's prediction
 - Levenshtein (edit) distance
-- Label Flip Rate (LFR)
 - Perplexity (PPL)
-- Downstream task accuracy
 """
 
 import argparse
@@ -23,7 +31,7 @@ from peft import PeftModel
 from config import Config
 from dataset_registry import get_dataset, list_datasets
 from prompts import get_generation_prompt, get_verification_prompt, format_chat_messages
-from utils import parse_edit_tag, save_json, normalize_label
+from utils import parse_edit_tag, save_json, save_jsonl, load_jsonl, normalize_label
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -80,6 +88,11 @@ def get_parser() -> argparse.ArgumentParser:
         type=int,
         default=42,
         help="Random seed for reproducibility",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from previous progress files",
     )
     
     return parser
@@ -169,6 +182,102 @@ def sample_entries_with_shared_indices(
     return sampled_data
 
 
+def predict_label(
+    model,
+    tokenizer,
+    verification_inputs: dict,
+    dataset_name: str,
+    dataset,
+) -> Optional[str]:
+    """Predict the label for given inputs using the model."""
+    system_prompt, user_prompt = get_verification_prompt(
+        dataset_name=dataset_name,
+        **verification_inputs,
+    )
+    messages = format_chat_messages(system_prompt, user_prompt)
+    
+    text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    
+    model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+    
+    with torch.no_grad():
+        generated_ids = model.generate(
+            **model_inputs,
+            max_new_tokens=50,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+    
+    generated_ids = [
+        output_ids[len(input_ids):]
+        for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
+    ]
+    
+    response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
+    predicted_label = dataset.parse_label_from_response(response)
+    
+    return predicted_label
+
+
+def compute_original_predictions(
+    model,
+    tokenizer,
+    sampled_data: dict[str, list[dict]],
+    output_dir: Path,
+    resume: bool = False,
+) -> dict:
+    """
+    Pre-compute base model's predictions on original (unedited) inputs.
+    
+    This serves as the reference for computing LFR - we measure whether
+    the edit changed the model's prediction, not whether it matches ground truth.
+    
+    Returns:
+        Dictionary mapping (dataset_name, entry_idx) to predicted label
+    """
+    predictions_file = output_dir / "original_predictions.json"
+    
+    # Resume from existing predictions if available
+    if resume and predictions_file.exists():
+        print(f"Loading existing original predictions from {predictions_file}")
+        with open(predictions_file) as f:
+            saved_predictions = json.load(f)
+        # Convert string keys back to tuples
+        predictions = {}
+        for key, value in saved_predictions.items():
+            parts = key.split("|")
+            predictions[(parts[0], int(parts[1]))] = value
+        return predictions
+    
+    print("\nComputing base model predictions on original inputs...")
+    predictions = {}
+    
+    for dataset_name, entries in sampled_data.items():
+        dataset = get_dataset(dataset_name)
+        
+        for entry in tqdm(entries, desc=f"Original predictions - {dataset_name}"):
+            # Get verification inputs for original text
+            original_text = dataset.get_original_text(entry)
+            verification_inputs = dataset.get_verification_inputs(entry, original_text)
+            
+            predicted_label = predict_label(
+                model, tokenizer, verification_inputs, dataset_name, dataset
+            )
+            
+            predictions[(dataset_name, entry["idx"])] = predicted_label
+    
+    # Save predictions (convert tuple keys to strings for JSON)
+    saved_predictions = {f"{k[0]}|{k[1]}": v for k, v in predictions.items()}
+    save_json(saved_predictions, str(predictions_file))
+    print(f"Saved original predictions to {predictions_file}")
+    
+    return predictions
+
+
 def generate_counterfactual(
     model,
     tokenizer,
@@ -176,6 +285,10 @@ def generate_counterfactual(
     max_new_tokens: int = 2048,
 ) -> str:
     """Generate a single counterfactual."""
+    # Vary seed for diversity
+    random.seed()
+    torch.manual_seed(random.randint(0, 2**32 - 1))
+    
     text = tokenizer.apply_chat_template(
         messages,
         tokenize=False,
@@ -241,85 +354,58 @@ def compute_edit_distance(original: str, edited: str) -> dict:
     }
 
 
-def verify_label(
-    model,
-    tokenizer,
-    verification_inputs: dict,
-    dataset_name: str,
-    dataset,
-) -> tuple[Optional[str], float]:
-    """Verify the label of a counterfactual using the model."""
-    system_prompt, user_prompt = get_verification_prompt(
-        dataset_name=dataset_name,
-        **verification_inputs,
-    )
-    messages = format_chat_messages(system_prompt, user_prompt)
-    
-    text = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True,
-    )
-    
-    model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-    
-    with torch.no_grad():
-        generated_ids = model.generate(
-            **model_inputs,
-            max_new_tokens=50,
-            do_sample=False,
-            pad_token_id=tokenizer.eos_token_id,
-        )
-    
-    generated_ids = [
-        output_ids[len(input_ids):]
-        for input_ids, output_ids in zip(model_inputs.input_ids, generated_ids)
-    ]
-    
-    response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-    predicted_label = dataset.parse_label_from_response(response)
-    
-    return predicted_label
-
-
-def evaluate_model(
+def generate_counterfactuals_for_model(
     model,
     tokenizer,
     sampled_data: dict[str, list[dict]],
     cfs_per_entry: int,
     model_name: str,
-) -> dict:
+    output_dir: Path,
+    resume: bool = False,
+) -> dict[str, list[dict]]:
     """
-    Evaluate a model on counterfactual generation.
+    Generate counterfactuals for all entries using a model.
+    
+    Includes deduplication and progressive saving.
     
     Returns:
-        Dictionary with metrics per dataset and overall
+        Dictionary mapping dataset_name to list of entry results
     """
     results = {}
+    progress_file = output_dir / f"{model_name}_cfs_progress.jsonl"
     
+    # Load existing progress if resuming
+    completed_entries = set()
+    if resume and progress_file.exists():
+        print(f"Resuming {model_name} CF generation from {progress_file}")
+        existing = load_jsonl(str(progress_file))
+        for entry_result in existing:
+            key = (entry_result["dataset_name"], entry_result["idx"])
+            completed_entries.add(key)
+            
+            if entry_result["dataset_name"] not in results:
+                results[entry_result["dataset_name"]] = []
+            results[entry_result["dataset_name"]].append(entry_result)
+        print(f"  Loaded {len(completed_entries)} completed entries")
+    
+    # Generate CFs for remaining entries
     for dataset_name, entries in sampled_data.items():
-        print(f"\nEvaluating {model_name} on {dataset_name}...")
+        if dataset_name not in results:
+            results[dataset_name] = []
+        
         dataset = get_dataset(dataset_name)
         
-        dataset_results = {
-            "entries": [],
-            "metrics": {
-                "total_cfs": 0,
-                "parsed_cfs": 0,
-                "correct_flips": 0,
-                "total_edit_distance": 0.0,
-                "total_norm_edit_distance": 0.0,
-                "total_perplexity": 0.0,
-                "perplexity_count": 0,
-            }
-        }
-        
         for entry in tqdm(entries, desc=f"{model_name} - {dataset_name}"):
+            # Skip if already completed
+            if (dataset_name, entry["idx"]) in completed_entries:
+                continue
+            
             formatted = dataset.format_for_prompt(entry)
             target_labels = dataset.get_alternative_labels(entry["label"])
             original_text = dataset.get_original_text(entry)
             
             entry_cfs = []
+            seen_texts = set()  # For deduplication
             
             for i in range(cfs_per_entry):
                 target_label = target_labels[i % len(target_labels)]
@@ -335,101 +421,217 @@ def evaluate_model(
                 response = generate_counterfactual(model, tokenizer, messages)
                 edited_text = parse_edit_tag(response)
                 
-                dataset_results["metrics"]["total_cfs"] += 1
-                
-                cf_result = {
-                    "target_label": target_label,
-                    "edited_text": edited_text,
-                    "parse_success": edited_text is not None,
-                }
-                
-                if edited_text is not None:
-                    dataset_results["metrics"]["parsed_cfs"] += 1
+                # Deduplication: skip if we've seen this exact text
+                if edited_text is not None and edited_text not in seen_texts:
+                    seen_texts.add(edited_text)
                     
                     # Compute edit distance
                     edit_metrics = compute_edit_distance(original_text, edited_text)
-                    cf_result.update(edit_metrics)
-                    dataset_results["metrics"]["total_edit_distance"] += edit_metrics["levenshtein_abs"]
-                    dataset_results["metrics"]["total_norm_edit_distance"] += edit_metrics["levenshtein_norm"]
                     
-                    # Compute perplexity of edited text
+                    # Compute perplexity
                     try:
                         ppl = compute_perplexity(model, tokenizer, edited_text)
-                        cf_result["perplexity"] = ppl
-                        dataset_results["metrics"]["total_perplexity"] += ppl
-                        dataset_results["metrics"]["perplexity_count"] += 1
-                    except Exception as e:
-                        cf_result["perplexity"] = None
+                    except Exception:
+                        ppl = None
                     
-                    # Verify label flip
-                    verification_inputs = dataset.get_verification_inputs(entry, edited_text)
-                    predicted_label = verify_label(
-                        model, tokenizer, verification_inputs, dataset_name, dataset
-                    )
-                    
-                    is_correct = (
-                        predicted_label is not None and
-                        normalize_label(predicted_label) == normalize_label(target_label)
-                    )
-                    cf_result["predicted_label"] = predicted_label
-                    cf_result["is_correct"] = is_correct
-                    
-                    if is_correct:
-                        dataset_results["metrics"]["correct_flips"] += 1
-                
-                entry_cfs.append(cf_result)
+                    entry_cfs.append({
+                        "target_label": target_label,
+                        "edited_text": edited_text,
+                        "levenshtein_abs": edit_metrics["levenshtein_abs"],
+                        "levenshtein_norm": edit_metrics["levenshtein_norm"],
+                        "perplexity": ppl,
+                    })
             
-            dataset_results["entries"].append({
+            entry_result = {
                 "idx": entry["idx"],
+                "dataset_name": dataset_name,
                 "original_label": entry["label"],
+                "original_text": original_text,
                 "counterfactuals": entry_cfs,
-            })
-        
-        # Compute summary metrics
-        m = dataset_results["metrics"]
-        parsed = m["parsed_cfs"]
-        
-        dataset_results["summary"] = {
-            "total_cfs": m["total_cfs"],
-            "parse_rate": parsed / m["total_cfs"] if m["total_cfs"] > 0 else 0,
-            "label_flip_rate": m["correct_flips"] / parsed if parsed > 0 else 0,
-            "avg_edit_distance": m["total_edit_distance"] / parsed if parsed > 0 else 0,
-            "avg_norm_edit_distance": m["total_norm_edit_distance"] / parsed if parsed > 0 else 0,
-            "avg_perplexity": m["total_perplexity"] / m["perplexity_count"] if m["perplexity_count"] > 0 else 0,
-        }
-        
-        results[dataset_name] = dataset_results
+            }
+            
+            results[dataset_name].append(entry_result)
+            
+            # Progressive save
+            with open(progress_file, "a") as f:
+                f.write(json.dumps(entry_result) + "\n")
     
     return results
 
 
-def generate_report(base_results: dict, dpo_results: dict, output_dir: Path) -> str:
+def verify_counterfactuals_with_base_model(
+    base_model,
+    tokenizer,
+    cf_results: dict[str, list[dict]],
+    original_predictions: dict,
+    output_dir: Path,
+    model_source: str,  # "base" or "dpo"
+) -> dict[str, list[dict]]:
+    """
+    Verify all counterfactuals using the BASE model.
+    
+    This ensures fair comparison - same judge for both base and DPO CFs.
+    LFR is computed by comparing CF prediction to original prediction.
+    
+    Args:
+        base_model: The base model (used as judge)
+        tokenizer: Tokenizer
+        cf_results: Dictionary of CF results per dataset
+        original_predictions: Pre-computed original predictions
+        output_dir: Output directory
+        model_source: "base" or "dpo" (for labeling in output)
+        
+    Returns:
+        Updated cf_results with verification results
+    """
+    print(f"\nVerifying {model_source} CFs using BASE model as judge...")
+    
+    for dataset_name, entries in cf_results.items():
+        dataset = get_dataset(dataset_name)
+        
+        for entry_result in tqdm(entries, desc=f"Verifying {model_source} - {dataset_name}"):
+            original_pred = original_predictions.get(
+                (dataset_name, entry_result["idx"])
+            )
+            
+            for cf in entry_result["counterfactuals"]:
+                if cf.get("edited_text") is None:
+                    cf["predicted_label"] = None
+                    cf["label_flipped"] = False
+                    continue
+                
+                # Build verification inputs based on dataset type
+                # We need to reconstruct the entry for verification
+                if dataset_name.startswith("snli"):
+                    if dataset_name == "snli_premise":
+                        verification_inputs = {
+                            "premise": cf["edited_text"],
+                            "hypothesis": entry_result.get("hypothesis", ""),
+                        }
+                    else:  # snli_hypothesis
+                        verification_inputs = {
+                            "premise": entry_result.get("premise", ""),
+                            "hypothesis": cf["edited_text"],
+                        }
+                elif dataset_name == "boolq":
+                    verification_inputs = {
+                        "passage": cf["edited_text"],
+                        "question": entry_result.get("question", ""),
+                    }
+                else:
+                    continue
+                
+                # Predict label using BASE model
+                predicted_label = predict_label(
+                    base_model, tokenizer, verification_inputs, dataset_name, dataset
+                )
+                
+                cf["predicted_label"] = predicted_label
+                
+                # LFR: Did the prediction change from original?
+                if original_pred is not None and predicted_label is not None:
+                    cf["label_flipped"] = (
+                        normalize_label(predicted_label) != normalize_label(original_pred)
+                    )
+                else:
+                    cf["label_flipped"] = False
+    
+    return cf_results
+
+
+def add_entry_context(
+    cf_results: dict[str, list[dict]],
+    sampled_data: dict[str, list[dict]],
+) -> dict[str, list[dict]]:
+    """Add original entry context to CF results for verification."""
+    for dataset_name, entries in cf_results.items():
+        # Build lookup by idx
+        entry_lookup = {e["idx"]: e for e in sampled_data.get(dataset_name, [])}
+        
+        for entry_result in entries:
+            original_entry = entry_lookup.get(entry_result["idx"], {})
+            
+            # Add context fields needed for verification
+            if dataset_name.startswith("snli"):
+                entry_result["premise"] = original_entry.get("premise", "")
+                entry_result["hypothesis"] = original_entry.get("hypothesis", "")
+            elif dataset_name == "boolq":
+                entry_result["passage"] = original_entry.get("passage", "")
+                entry_result["question"] = original_entry.get("question", "")
+    
+    return cf_results
+
+
+def compute_metrics(cf_results: dict[str, list[dict]]) -> dict:
+    """Compute summary metrics from CF results."""
+    metrics = {}
+    
+    for dataset_name, entries in cf_results.items():
+        total_cfs = 0
+        flipped_cfs = 0
+        total_edit_dist = 0.0
+        total_norm_edit_dist = 0.0
+        total_ppl = 0.0
+        ppl_count = 0
+        
+        for entry_result in entries:
+            for cf in entry_result["counterfactuals"]:
+                if cf.get("edited_text") is None:
+                    continue
+                
+                total_cfs += 1
+                
+                if cf.get("label_flipped", False):
+                    flipped_cfs += 1
+                
+                total_edit_dist += cf.get("levenshtein_abs", 0)
+                total_norm_edit_dist += cf.get("levenshtein_norm", 0)
+                
+                if cf.get("perplexity") is not None:
+                    total_ppl += cf["perplexity"]
+                    ppl_count += 1
+        
+        metrics[dataset_name] = {
+            "total_cfs": total_cfs,
+            "label_flip_rate": flipped_cfs / total_cfs if total_cfs > 0 else 0,
+            "avg_edit_distance": total_edit_dist / total_cfs if total_cfs > 0 else 0,
+            "avg_norm_edit_distance": total_norm_edit_dist / total_cfs if total_cfs > 0 else 0,
+            "avg_perplexity": total_ppl / ppl_count if ppl_count > 0 else 0,
+        }
+    
+    return metrics
+
+
+def generate_report(base_metrics: dict, dpo_metrics: dict) -> str:
     """Generate a markdown comparison report."""
     report_lines = [
         "# Model Evaluation Report",
         "",
         "Comparison of Base Model vs DPO-Tuned Model on Counterfactual Generation",
         "",
+        "**Note**: LFR measures whether the edit changed the BASE model's prediction",
+        "(not whether it matched ground truth). BASE model is the judge for all CFs.",
+        "",
         "## Summary",
         "",
-        "| Dataset | Model | Parse Rate | LFR | Avg Edit Dist | Avg Norm Edit Dist | Avg PPL |",
-        "|---------|-------|------------|-----|---------------|-------------------|---------|",
+        "| Dataset | Model | LFR | Avg Edit Dist | Avg Norm Edit Dist | Avg PPL |",
+        "|---------|-------|-----|---------------|-------------------|---------|",
     ]
     
-    all_datasets = set(base_results.keys()) | set(dpo_results.keys())
+    all_datasets = set(base_metrics.keys()) | set(dpo_metrics.keys())
     
     for dataset_name in sorted(all_datasets):
-        if dataset_name in base_results:
-            s = base_results[dataset_name]["summary"]
+        if dataset_name in base_metrics:
+            s = base_metrics[dataset_name]
             report_lines.append(
-                f"| {dataset_name} | Base | {s['parse_rate']:.1%} | {s['label_flip_rate']:.1%} | "
+                f"| {dataset_name} | Base | {s['label_flip_rate']:.1%} | "
                 f"{s['avg_edit_distance']:.1f} | {s['avg_norm_edit_distance']:.3f} | {s['avg_perplexity']:.1f} |"
             )
         
-        if dataset_name in dpo_results:
-            s = dpo_results[dataset_name]["summary"]
+        if dataset_name in dpo_metrics:
+            s = dpo_metrics[dataset_name]
             report_lines.append(
-                f"| {dataset_name} | DPO | {s['parse_rate']:.1%} | {s['label_flip_rate']:.1%} | "
+                f"| {dataset_name} | DPO | {s['label_flip_rate']:.1%} | "
                 f"{s['avg_edit_distance']:.1f} | {s['avg_norm_edit_distance']:.3f} | {s['avg_perplexity']:.1f} |"
             )
     
@@ -437,8 +639,7 @@ def generate_report(base_results: dict, dpo_results: dict, output_dir: Path) -> 
         "",
         "## Metrics Explanation",
         "",
-        "- **Parse Rate**: % of responses with valid `<edit>` tags",
-        "- **LFR (Label Flip Rate)**: % of CFs that successfully flip the label to target",
+        "- **LFR (Label Flip Rate)**: % of CFs where BASE model's prediction changed from original",
         "- **Avg Edit Dist**: Average Levenshtein (character) edit distance",
         "- **Avg Norm Edit Dist**: Edit distance normalized by max text length",
         "- **Avg PPL**: Average perplexity of generated edits (lower = more fluent)",
@@ -449,13 +650,13 @@ def generate_report(base_results: dict, dpo_results: dict, output_dir: Path) -> 
     
     # Compute overall improvements
     for dataset_name in sorted(all_datasets):
-        if dataset_name in base_results and dataset_name in dpo_results:
-            base_lfr = base_results[dataset_name]["summary"]["label_flip_rate"]
-            dpo_lfr = dpo_results[dataset_name]["summary"]["label_flip_rate"]
+        if dataset_name in base_metrics and dataset_name in dpo_metrics:
+            base_lfr = base_metrics[dataset_name]["label_flip_rate"]
+            dpo_lfr = dpo_metrics[dataset_name]["label_flip_rate"]
             lfr_diff = dpo_lfr - base_lfr
             
-            base_edit = base_results[dataset_name]["summary"]["avg_norm_edit_distance"]
-            dpo_edit = dpo_results[dataset_name]["summary"]["avg_norm_edit_distance"]
+            base_edit = base_metrics[dataset_name]["avg_norm_edit_distance"]
+            dpo_edit = dpo_metrics[dataset_name]["avg_norm_edit_distance"]
             edit_diff = dpo_edit - base_edit
             
             report_lines.append(f"### {dataset_name}")
@@ -483,6 +684,11 @@ def main():
     print(f"Split: {args.split}")
     print(f"Samples per dataset: {args.num_samples}")
     print(f"CFs per entry: {args.cfs_per_entry}")
+    print(f"Resume: {args.resume}")
+    print("")
+    print("Evaluation approach:")
+    print("  - LFR = % where BASE model's prediction changed (not ground truth)")
+    print("  - BASE model judges ALL CFs (both base and DPO generated)")
     print("=" * 60)
     
     # Create output directory
@@ -502,40 +708,86 @@ def main():
     # Load base model
     base_model, tokenizer = load_base_model(args.base_model, Config.MODEL_CACHE_DIR)
     
-    # Evaluate base model
+    # Step 1: Compute original predictions (base model on unedited inputs)
     print("\n" + "=" * 60)
-    print("Evaluating BASE model...")
+    print("Step 1: Computing original predictions...")
     print("=" * 60)
-    base_results = evaluate_model(
+    original_predictions = compute_original_predictions(
+        model=base_model,
+        tokenizer=tokenizer,
+        sampled_data=sampled_data,
+        output_dir=output_dir,
+        resume=args.resume,
+    )
+    
+    # Step 2: Generate CFs with base model
+    print("\n" + "=" * 60)
+    print("Step 2: Generating CFs with BASE model...")
+    print("=" * 60)
+    base_cf_results = generate_counterfactuals_for_model(
         model=base_model,
         tokenizer=tokenizer,
         sampled_data=sampled_data,
         cfs_per_entry=args.cfs_per_entry,
         model_name="base",
+        output_dir=output_dir,
+        resume=args.resume,
     )
     
-    # Load DPO model
+    # Step 3: Generate CFs with DPO model
     print("\n" + "=" * 60)
-    print("Loading DPO-tuned model...")
+    print("Step 3: Loading DPO model and generating CFs...")
     print("=" * 60)
     dpo_model = load_dpo_model(base_model, args.dpo_model_path)
     
-    # Evaluate DPO model
-    print("\n" + "=" * 60)
-    print("Evaluating DPO-TUNED model...")
-    print("=" * 60)
-    dpo_results = evaluate_model(
+    dpo_cf_results = generate_counterfactuals_for_model(
         model=dpo_model,
         tokenizer=tokenizer,
         sampled_data=sampled_data,
         cfs_per_entry=args.cfs_per_entry,
         model_name="dpo",
+        output_dir=output_dir,
+        resume=args.resume,
     )
     
-    # Save results
+    # Unload DPO model to free memory for verification
+    del dpo_model
+    torch.cuda.empty_cache()
+    
+    # Add entry context for verification
+    base_cf_results = add_entry_context(base_cf_results, sampled_data)
+    dpo_cf_results = add_entry_context(dpo_cf_results, sampled_data)
+    
+    # Step 4: Verify ALL CFs using BASE model
     print("\n" + "=" * 60)
-    print("Saving results...")
+    print("Step 4: Verifying all CFs with BASE model as judge...")
     print("=" * 60)
+    
+    base_cf_results = verify_counterfactuals_with_base_model(
+        base_model=base_model,
+        tokenizer=tokenizer,
+        cf_results=base_cf_results,
+        original_predictions=original_predictions,
+        output_dir=output_dir,
+        model_source="base",
+    )
+    
+    dpo_cf_results = verify_counterfactuals_with_base_model(
+        base_model=base_model,
+        tokenizer=tokenizer,
+        cf_results=dpo_cf_results,
+        original_predictions=original_predictions,
+        output_dir=output_dir,
+        model_source="dpo",
+    )
+    
+    # Step 5: Compute metrics and generate report
+    print("\n" + "=" * 60)
+    print("Step 5: Computing metrics and saving results...")
+    print("=" * 60)
+    
+    base_metrics = compute_metrics(base_cf_results)
+    dpo_metrics = compute_metrics(dpo_cf_results)
     
     # Save detailed JSON results
     save_json({
@@ -548,15 +800,23 @@ def main():
             "cfs_per_entry": args.cfs_per_entry,
             "seed": args.seed,
         },
-        "base_results": {k: v["summary"] for k, v in base_results.items()},
-        "dpo_results": {k: v["summary"] for k, v in dpo_results.items()},
+        "evaluation_approach": {
+            "lfr_definition": "% where BASE model prediction changed from original",
+            "judge": "BASE model for all CFs (both base and DPO generated)",
+        },
+        "base_metrics": base_metrics,
+        "dpo_metrics": dpo_metrics,
     }, str(output_dir / "eval_summary.json"))
     
     # Save full results
-    save_json({"base": base_results, "dpo": dpo_results}, str(output_dir / "eval_full.json"))
+    save_json({
+        "original_predictions": {f"{k[0]}|{k[1]}": v for k, v in original_predictions.items()},
+        "base_results": base_cf_results,
+        "dpo_results": dpo_cf_results,
+    }, str(output_dir / "eval_full.json"))
     
     # Generate and save report
-    report = generate_report(base_results, dpo_results, output_dir)
+    report = generate_report(base_metrics, dpo_metrics)
     with open(output_dir / "eval_report.md", "w") as f:
         f.write(report)
     

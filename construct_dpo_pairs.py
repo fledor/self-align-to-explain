@@ -49,16 +49,10 @@ def get_parser() -> argparse.ArgumentParser:
         help=f"Datasets to process (default: {Config.ACTIVE_DATASETS})",
     )
     parser.add_argument(
-        "--chosen_count",
+        "--max_pairs",
         type=int,
-        default=Config.CHOSEN_COUNT,
-        help=f"Number of chosen examples per entry (default: {Config.CHOSEN_COUNT})",
-    )
-    parser.add_argument(
-        "--rejected_count",
-        type=int,
-        default=Config.REJECTED_COUNT,
-        help=f"Number of rejected examples per entry (default: {Config.REJECTED_COUNT})",
+        default=2,
+        help="Maximum DPO pairs per entry (default: 2, using 1-to-1 pairing)",
     )
     parser.add_argument(
         "--min_pairs_per_entry",
@@ -99,25 +93,23 @@ def compute_unified_score(cf: dict) -> float:
 
 def select_dpo_candidates(
     counterfactuals: list[dict],
-    chosen_count: int,
-    rejected_count: int,
+    max_pairs: int = 2,
 ) -> Tuple[list[dict], list[dict]]:
     """
-    Select chosen and rejected candidates using unified ranking.
+    Select chosen and rejected candidates for 1-to-1 DPO pairing.
     
-    All CFs are ranked by unified score. Top N become "chosen", bottom N become "rejected".
-    This approach:
-    - Always produces pairs even if all CFs succeed or all fail
-    - Captures quality gradients within correctness groups
-    - Uses hard weighting so correct CFs always rank above incorrect
+    Chosen pool: Only CFs that successfully flipped the label (is_correct=True)
+    Rejected pool: All valid CFs, sorted worst-first
+    
+    Pairing is 1-to-1: best↔worst, 2nd-best↔2nd-worst (max 2 pairs per entry)
     
     Args:
         counterfactuals: List of evaluated counterfactuals
-        chosen_count: Number of top CFs to select as "chosen"
-        rejected_count: Number of bottom CFs to select as "rejected"
+        max_pairs: Maximum number of pairs to create (default: 2)
         
     Returns:
-        Tuple of (chosen_cfs, rejected_cfs)
+        Tuple of (chosen_cfs_ranked, rejected_cfs_ranked)
+        Both lists are sorted for 1-to-1 pairing (chosen: best-first, rejected: worst-first)
     """
     # Filter to CFs with valid edits
     valid_cfs = [
@@ -125,22 +117,25 @@ def select_dpo_candidates(
         if cf.get("edited_text") is not None
     ]
     
-    if len(valid_cfs) < chosen_count + rejected_count:
-        # Not enough CFs to form distinct chosen/rejected sets
+    if not valid_cfs:
         return [], []
     
-    # Sort by unified score (descending)
-    valid_cfs.sort(key=compute_unified_score, reverse=True)
-    
-    # Top N = chosen, Bottom N = rejected
-    chosen_cfs = valid_cfs[:chosen_count]
-    rejected_cfs = valid_cfs[-rejected_count:]
-    
-    # Store unified scores for metadata
-    for cf in chosen_cfs + rejected_cfs:
+    # Compute unified scores for all valid CFs
+    for cf in valid_cfs:
         cf["unified_score"] = compute_unified_score(cf)
     
-    return chosen_cfs, rejected_cfs
+    # Chosen pool: Only CFs that successfully flipped the label
+    correct_cfs = [cf for cf in valid_cfs if cf.get("is_correct", False)]
+    correct_cfs.sort(key=lambda x: x["unified_score"], reverse=True)  # Best first
+    
+    # Rejected pool: All valid CFs sorted by score (worst first)
+    all_cfs_worst_first = sorted(valid_cfs, key=lambda x: x["unified_score"])  # Worst first
+    
+    # Need at least 1 correct CF for chosen and 1 CF for rejected
+    if not correct_cfs or not all_cfs_worst_first:
+        return [], []
+    
+    return correct_cfs, all_cfs_worst_first
 
 
 def format_prompt_for_dpo(
@@ -202,73 +197,78 @@ def format_prompt_for_dpo(
 
 def construct_pairs_for_entry(
     entry: dict,
-    chosen_count: int,
-    rejected_count: int,
+    max_pairs: int = 2,
     tokenizer: Optional[AutoTokenizer] = None,
 ) -> list[dict]:
     """
-    Construct DPO pairs for a single entry using unified ranking.
+    Construct DPO pairs for a single entry using 1-to-1 pairing.
+    
+    Pairing strategy:
+    - Pair 1: best chosen (must flip) ↔ worst rejected
+    - Pair 2: 2nd-best chosen ↔ 2nd-worst rejected (if available)
     
     Args:
         entry: Entry with evaluated counterfactuals
-        chosen_count: Number of top CFs to select as chosen
-        rejected_count: Number of bottom CFs to select as rejected
+        max_pairs: Maximum pairs per entry (default: 2)
         tokenizer: Tokenizer for chat template formatting
         
     Returns:
-        List of DPO pairs
+        List of DPO pairs (max 2 per entry)
     """
     counterfactuals = entry["counterfactuals"]
     
-    # Select candidates using unified ranking
-    chosen_cfs, rejected_cfs = select_dpo_candidates(
-        counterfactuals, chosen_count, rejected_count
+    # Get ranked candidates (chosen: best-first, rejected: worst-first)
+    chosen_ranked, rejected_ranked = select_dpo_candidates(
+        counterfactuals, max_pairs=max_pairs
     )
     
-    if not chosen_cfs or not rejected_cfs:
+    if not chosen_ranked or not rejected_ranked:
         return []
     
     pairs = []
     
-    # Create pairs: each chosen paired with each rejected
-    for chosen_cf in chosen_cfs:
-        for rejected_cf in rejected_cfs:
-            # Use the same target label for the prompt as the chosen example
-            # This ensures the prompt matches the chosen response
-            prompt = format_prompt_for_dpo(entry, chosen_cf["target_label"], tokenizer)
-            
-            # Use edited_text (extracted content without edit tags)
-            chosen_text = chosen_cf["edited_text"]
-            rejected_text = rejected_cf["edited_text"]
-            
-            # Build minimal pair for dpo_pairs.jsonl (debugging/analysis)
-            pair = {
-                "entry_idx": entry["idx"],
-                "dataset_name": entry["dataset_name"],
-                "original_label": entry["original_label"],
-                "chosen_text": chosen_text,
-                "rejected_text": rejected_text,
-                "chosen_target_label": chosen_cf["target_label"],
-                "rejected_target_label": rejected_cf["target_label"],
-                "chosen_unified_score": chosen_cf.get("unified_score", 0),
-                "rejected_unified_score": rejected_cf.get("unified_score", 0),
-                "chosen_is_correct": chosen_cf.get("is_correct", False),
-                "rejected_is_correct": rejected_cf.get("is_correct", False),
-                # Include source text fields for context
-            }
-            
-            # Add dataset-specific source fields
-            if entry["dataset_name"].startswith("snli"):
-                pair["premise"] = entry["premise"]
-                pair["hypothesis"] = entry["hypothesis"]
-            elif entry["dataset_name"] == "boolq":
-                pair["passage"] = entry["passage"]
-                pair["question"] = entry["question"]
-            
-            # Store full prompt for training file generation
-            pair["_prompt"] = prompt
-            
-            pairs.append(pair)
+    # 1-to-1 pairing: best↔worst, 2nd-best↔2nd-worst
+    num_pairs = min(max_pairs, len(chosen_ranked), len(rejected_ranked))
+    
+    for i in range(num_pairs):
+        chosen_cf = chosen_ranked[i]   # i-th best (must have flipped)
+        rejected_cf = rejected_ranked[i]  # i-th worst
+        
+        # Skip if chosen and rejected are the same CF
+        if chosen_cf.get("edited_text") == rejected_cf.get("edited_text"):
+            continue
+        
+        # Use the target label from the chosen example for the prompt
+        prompt = format_prompt_for_dpo(entry, chosen_cf["target_label"], tokenizer)
+        
+        # Build minimal pair for dpo_pairs.jsonl (debugging/analysis)
+        pair = {
+            "entry_idx": entry["idx"],
+            "dataset_name": entry["dataset_name"],
+            "original_label": entry["original_label"],
+            "chosen_text": chosen_cf["edited_text"],
+            "rejected_text": rejected_cf["edited_text"],
+            "chosen_target_label": chosen_cf["target_label"],
+            "rejected_target_label": rejected_cf["target_label"],
+            "chosen_unified_score": chosen_cf.get("unified_score", 0),
+            "rejected_unified_score": rejected_cf.get("unified_score", 0),
+            "chosen_is_correct": True,  # Always true now (filtered)
+            "rejected_is_correct": rejected_cf.get("is_correct", False),
+            "pair_rank": i + 1,  # 1 = best↔worst, 2 = 2nd-best↔2nd-worst
+        }
+        
+        # Add dataset-specific source fields
+        if entry["dataset_name"].startswith("snli"):
+            pair["premise"] = entry["premise"]
+            pair["hypothesis"] = entry["hypothesis"]
+        elif entry["dataset_name"] == "boolq":
+            pair["passage"] = entry["passage"]
+            pair["question"] = entry["question"]
+        
+        # Store full prompt for training file generation
+        pair["_prompt"] = prompt
+        
+        pairs.append(pair)
     
     return pairs
 
@@ -283,8 +283,8 @@ def main():
     print(f"Input: {args.input_dir}")
     print(f"Output: {args.output_dir}")
     print(f"Model: {args.model_name}")
-    print(f"Chosen per entry: {args.chosen_count}")
-    print(f"Rejected per entry: {args.rejected_count}")
+    print(f"Max pairs per entry: {args.max_pairs} (1-to-1 pairing)")
+    print(f"Selection: chosen must flip label, rejected = worst scoring")
     print("=" * 60)
     
     # Ensure output directory exists
@@ -326,8 +326,7 @@ def main():
         for entry in tqdm(entries, desc=f"Constructing pairs for {dataset_name}"):
             pairs = construct_pairs_for_entry(
                 entry=entry,
-                chosen_count=args.chosen_count,
-                rejected_count=args.rejected_count,
+                max_pairs=args.max_pairs,
                 tokenizer=tokenizer,
             )
             

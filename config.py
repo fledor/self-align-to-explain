@@ -44,7 +44,7 @@ class Config:
     TEMPERATURE: float = 1.2
     
     # Top-p (nucleus sampling) - high value for diversity
-    TOP_P: float = 0.95
+    TOP_P: float = 0.99
     
     # Top-k - high value for diversity
     TOP_K: int = 100

@@ -71,11 +71,10 @@ python construct_dpo_pairs.py \
     --datasets boolq \
     --input_dir ./results/counterfactuals_100e40c \
     --output_dir ./results/dpo_pairs_boolq_100e40c \
-    --chosen_count 2 \
-    --rejected_count 2
+    --max_pairs 2
 ```
 
-Constructs preference pairs using **unified ranking** (see Design Choices below).
+Constructs preference pairs using **1-to-1 pairing** (see Design Choices below).
 
 **Output:**
 - `dpo_pairs.jsonl` - Minimal format for debugging/analysis
@@ -106,7 +105,8 @@ python evaluate_models.py \
     --split validation \
     --num_samples 20 \
     --cfs_per_entry 5 \
-    --output_dir ./results/evaluation_boolq_100e40c
+    --output_dir ./results/evaluation_boolq_100e40c \
+    --resume  # Optional: resume from previous progress
 ```
 
 Compares base model vs DPO-tuned model on held-out validation data:
@@ -114,12 +114,19 @@ Compares base model vs DPO-tuned model on held-out validation data:
 | Metric | Description |
 |--------|-------------|
 | **Levenshtein Distance** | Character-level edit distance (lower = more minimal edits) |
-| **Label Flip Rate (LFR)** | % of CFs that successfully flip the label (higher = better) |
+| **Label Flip Rate (LFR)** | % of CFs where the model's prediction changed (higher = better) |
 | **Perplexity (PPL)** | Fluency of generated text (lower = more natural) |
 
-**Note:** For SNLI datasets, the same entry indices are used for both `snli_premise` and `snli_hypothesis` to ensure fair comparison on identical NLI pairs.
+**Important**: LFR is computed by comparing each CF's label to the BASE model's prediction on the **original input** (not ground truth). This measures "did the edit change the model's mind?" rather than "did we hit the target label?"
+
+**Fair comparison**: The BASE model is used as the judge for ALL counterfactuals (both base-generated and DPO-generated).
+
+**Notes:** 
+- For SNLI datasets, the same entry indices are used for both `snli_premise` and `snli_hypothesis` to ensure fair comparison on identical NLI pairs.
+- Supports deduplication, progressive saves (`--resume`), and resume capability.
 
 **Output:** 
+- `results/evaluation_{dataset}_{suffix}/original_predictions.json` - Base model predictions on original inputs
 - `results/evaluation_{dataset}_{suffix}/eval_report.md` - Human-readable comparison
 - `results/evaluation_{dataset}_{suffix}/eval_summary.json` - Structured metrics
 
@@ -157,9 +164,9 @@ SUFFIX="${ENTRIES}e${CFS}c"
 
 ## Design Choices
 
-### DPO Pair Selection: Unified Ranking
+### DPO Pair Selection: 1-to-1 Pairing with Hard Weighting
 
-We use **unified ranking with hard weighting** to select DPO pairs:
+We use **1-to-1 pairing** to create strong contrasts between chosen and rejected examples:
 
 ```
 Unified Score = correctness_bonus + (confidence × similarity)
@@ -167,12 +174,30 @@ Unified Score = correctness_bonus + (confidence × similarity)
 where correctness_bonus = 100 if label flip succeeded, 0 otherwise
 ```
 
-**How it works:**
-1. All counterfactuals are scored and ranked together
-2. Top N become **"chosen"** (best quality)
-3. Bottom N become **"rejected"** (worst quality)
-4. Each chosen is paired with each rejected → N×N pairs per entry
-5. Hard weighting (correctness_bonus=100) ensures correct CFs always rank above incorrect CFs, while still allowing quality differentiation within each group. The model learns "make the label flip work" (primary) and "make minimal edits" (secondary).
+**Selection rules:**
+1. **Chosen pool**: Only CFs that successfully flipped the label (`is_correct=True`)
+2. **Rejected pool**: All valid CFs, sorted by unified score (worst first)
+
+**Pairing:**
+- Pair 1: Best chosen ↔ Worst rejected
+- Pair 2: 2nd-best chosen ↔ 2nd-worst rejected
+
+```
+Before (N×N = 4 pairs):          After (1-to-1 = 2 pairs):
+┌─────────┐    ┌──────────┐     ┌─────────┐    ┌──────────┐
+│ best    │───▶│ worst    │     │ best    │───▶│ worst    │
+│         │───▶│ 2nd-worst│     └─────────┘    └──────────┘
+├─────────┤    ├──────────┤     ┌─────────┐    ┌──────────┐
+│ 2nd-best│───▶│ worst    │     │ 2nd-best│───▶│ 2nd-worst│
+│         │───▶│ 2nd-worst│     └─────────┘    └──────────┘
+└─────────┘    └──────────┘     (max 2 pairs, stronger contrasts)
+```
+
+**Why this approach:**
+- Chosen examples always flip the label (primary objective)
+- Each pair has maximum contrast between best and worst
+- Avoids weak pairs like second-best↔second-worst in N×N
+- Hard weighting ensures correct CFs rank above incorrect CFs
 
 ### Diverse Generation with Deduplication
 
@@ -180,7 +205,7 @@ We generate diverse counterfactuals using high temperature and seed variation:
 
 ```python
 TEMPERATURE = 1.2
-TOP_P = 0.95
+TOP_P = 0.99
 TOP_K = 100
 ```
 
@@ -251,30 +276,40 @@ class Config:
     
     # High-temperature sampling for diversity
     TEMPERATURE = 1.2
-    TOP_P = 0.95
+    TOP_P = 0.99  # High for maximum diversity
     TOP_K = 100
-    
-    # DPO pair selection
-    CHOSEN_COUNT = 2
-    REJECTED_COUNT = 2
 ```
 
 ## Project Structure
 
 ```
 cfg-dpo/
-├── config.py                    # Central configuration
-├── dataset_registry.py          # Dataset registry (extensible)
-├── prompts.py                   # Prompt templates
-├── utils.py                     # Shared utilities
-├── generate_counterfactuals.py  # Stage 1: Generate CFs
-├── evaluate_counterfactuals.py  # Stage 2: Evaluate CFs
-├── construct_dpo_pairs.py       # Stage 3: Build DPO pairs
-├── train_dpo_lora.py            # Stage 4: DPO training
-├── evaluate_models.py           # Stage 5: Model comparison
+├── config.py                      # Central configuration
+├── dataset_registry.py            # Dataset registry (extensible)
+├── prompts.py                     # Prompt templates
+├── utils.py                       # Shared utilities
+│
+├── generate_counterfactuals.py    # Stage 1: Generate CFs
+├── evaluate_counterfactuals.py    # Stage 2: Evaluate CFs
+├── construct_dpo_pairs.py         # Stage 3: Build DPO pairs
+├── train_dpo_lora.py              # Stage 4: DPO training
+├── evaluate_models.py             # Stage 5: Model comparison
+│
 ├── requirements.txt
-├── data/                        # Downloaded datasets
-└── results/                     # Output files (gitignored)
+├── README.md
+│
+├── data/                          # Downloaded datasets (tracked in git)
+│   ├── boolq/
+│   │   ├── train.jsonl
+│   │   └── validation.jsonl
+│   └── snli/
+│       ├── train.jsonl
+│       └── validation.jsonl
+│
+├── model_cache/                   # Cached model weights (gitignored)
+├── logs/                          # SLURM job logs (gitignored)
+│
+└── results/                       # Output files (gitignored)
     ├── counterfactuals_{suffix}/
     ├── dpo_pairs_{dataset}_{suffix}/
     ├── dpo_model_{dataset}_{suffix}/
@@ -313,6 +348,9 @@ Results are saved after each stage, allowing pipeline resumption:
 | 3 | `dpo_pairs_{dataset}_{suffix}/dpo_pairs.jsonl` | Minimal pairs for debugging |
 | 3 | `dpo_pairs_{dataset}_{suffix}/dpo_training.jsonl` | Full format for training |
 | 4 | `dpo_model_{dataset}_{suffix}/` | LoRA adapter weights |
+| 5 | `evaluation_{dataset}_{suffix}/original_predictions.json` | Base model predictions on originals |
+| 5 | `evaluation_{dataset}_{suffix}/base_cfs_progress.jsonl` | Base model CF generation progress |
+| 5 | `evaluation_{dataset}_{suffix}/dpo_cfs_progress.jsonl` | DPO model CF generation progress |
 | 5 | `evaluation_{dataset}_{suffix}/eval_report.md` | Human-readable comparison |
 | 5 | `evaluation_{dataset}_{suffix}/eval_summary.json` | Structured metrics |
 
