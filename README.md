@@ -1,27 +1,50 @@
-# Counterfactual DPO Training Pipeline
+# Counterfactual Generation with Preference Optimization
 
-A pipeline for generating diverse counterfactuals from classification datasets, evaluating them, training language models with Direct Preference Optimization (DPO), and measuring improvements.
+**Working Thesis Title:** *From Offline to Online: Comparing DPO, SFT, GRPO, and GDPO for Counterfactual Text Generation*
+
+A research pipeline for generating diverse counterfactuals from classification datasets, training language models with various preference optimization methods, and comparing their effectiveness.
+
+## Research Goal
+
+This project investigates how different training paradigms affect a language model's ability to generate **minimal, label-flipping counterfactuals** for text classification tasks. We compare:
+
+| Method | Type | Description |
+|--------|------|-------------|
+| **DPO** | Offline | Direct Preference Optimization on pre-generated preference pairs |
+| **SFT** | Offline | Supervised Fine-Tuning on successful counterfactuals only |
+| **GRPO** | Online | Group Relative Policy Optimization with generation during training |
+| **GDPO** | Online | Generalized DPO with iterative generation and training cycles |
+
+**Key distinction:** Offline methods train on pre-generated data (Stages 1-2), while online methods interleave generation and training.
+
+---
 
 ## Overview
 
-This pipeline implements a five-stage approach:
+The pipeline implements a multi-stage approach for **offline methods** (DPO, SFT):
 
 1. **Generate** diverse counterfactuals using high-temperature sampling
-2. **Evaluate** counterfactuals on correctness, confidence, and semantic similarity
-3. **Construct** DPO preference pairs using unified ranking
-4. **Train** the model with DPO to produce better counterfactuals
-5. **Compare** base model vs DPO-tuned model (edit distance, LFR, perplexity)
+2. **Evaluate** counterfactuals on label flip rate, confidence, and semantic similarity
+3. **Construct** training data (preference pairs for DPO, successful CFs for SFT)
+4. **Train** the model with chosen method (DPO, SFT, or future: GRPO, GDPO)
+5. **Compare** base model vs fine-tuned model (edit distance, LFR, perplexity)
 
 ```
+OFFLINE METHODS (DPO, SFT):
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
 │   Dataset   │ ─▶ │  Generate   │ ─▶ │  Evaluate   │ ─▶ │  Construct  │ ─▶ │    Train    │ ─▶ │   Compare   │
-│  (any type) │    │     CFs     │    │     CFs     │    │  DPO Pairs  │    │  with DPO   │    │   Models    │
+│  (any type) │    │     CFs     │    │     CFs     │    │ Train Data  │    │ DPO/SFT/... │    │   Models    │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
                          │                  │                  │                  │                  │
                          ▼                  ▼                  ▼                  ▼                  ▼
-                   ~40 CFs/entry      correctness,       unified rank        improved CF       Edit Dist,
-                   high temp          confidence,        → chosen/reject     model (LoRA)      LFR, PPL
+                   ~40 CFs/entry      label_flipped,     pairs (DPO) or      improved CF       Edit Dist,
+                   high temp          confidence,        chosen only (SFT)   model (LoRA)      LFR, PPL
                                       similarity
+
+ONLINE METHODS (GRPO, GDPO - planned):
+┌─────────────┐    ┌──────────────────────────────────────────────────────┐    ┌─────────────┐
+│   Dataset   │ ─▶ │  Train (generate + evaluate + learn interleaved)    │ ─▶ │   Compare   │
+└─────────────┘    └──────────────────────────────────────────────────────┘    └─────────────┘
 ```
 
 ## Currently Implemented Datasets
@@ -41,12 +64,26 @@ python generate_counterfactuals.py \
     --datasets boolq snli_premise snli_hypothesis \
     --max_entries 100 \
     --cfs_per_entry 40 \
-    --output_dir ./results/counterfactuals_100e40c
+    --output_dir ./results/counterfactuals_100e40c \
+    --resume  # Optional: resume from previous progress
 ```
 
 Generates diverse counterfactuals using high-temperature sampling. Target labels are distributed evenly across the generated counterfactuals.
 
-**Output:** `results/counterfactuals_{suffix}/{dataset}_progress.jsonl`
+**Parallel execution** (for large-scale runs):
+```bash
+python generate_counterfactuals.py \
+    --datasets boolq \
+    --max_entries 2000 \
+    --cfs_per_entry 40 \
+    --start_idx 0 --end_idx 100 \  # Process entries 0-99
+    --shard_id 0 \                 # Shard identifier
+    --output_dir ./results/counterfactuals_2000e40c
+```
+
+This creates `{dataset}_progress_shard0.jsonl`. Use `utils.merge_shard_files()` to combine after all shards complete.
+
+**Output:** `results/counterfactuals_{suffix}/{dataset}_progress.jsonl` (or `_shard{N}.jsonl` if sharding)
 
 ### Stage 2: Evaluate Counterfactuals
 
@@ -54,17 +91,22 @@ Generates diverse counterfactuals using high-temperature sampling. Target labels
 python evaluate_counterfactuals.py \
     --datasets boolq snli_premise snli_hypothesis \
     --input_dir ./results/counterfactuals_100e40c \
-    --output_dir ./results/counterfactuals_100e40c
+    --output_dir ./results/counterfactuals_100e40c \
+    --resume  # Optional: resume from previous progress
 ```
 
-Evaluates each counterfactual on:
-- **Correctness**: Did the label change succeed? (verified via LLM)
+First computes the model's prediction on each **original (unedited) input**, then evaluates each counterfactual on:
+- **Label Flipped**: Did the model's prediction CHANGE from the original? (not: did it match the target)
 - **Confidence**: How confident is the model in the new label?
 - **Semantic Similarity**: How minimal were the edits? (sentence embeddings)
 
-**Output:** `results/counterfactuals_{suffix}/{dataset}_evaluated.jsonl`
+**Important**: `label_flipped` compares against the model's OWN prediction on the original input (stored in `original_predictions.json`), not the ground truth label. This matches the evaluation approach in Stage 5.
 
-### Stage 3: Construct DPO Pairs
+**Output:** 
+- `results/counterfactuals_{suffix}/{dataset}_original_predictions.json` - Model predictions on original inputs
+- `results/counterfactuals_{suffix}/{dataset}_evaluated.jsonl` - CFs with evaluation scores
+
+### Stage 3: Construct Training Data
 
 ```bash
 python construct_dpo_pairs.py \
@@ -74,42 +116,51 @@ python construct_dpo_pairs.py \
     --max_pairs 2
 ```
 
-Constructs preference pairs using **1-to-1 pairing** (see Design Choices below).
+Constructs preference pairs using **1-to-1 pairing** (see Design Choices below). The output can be used for both DPO and SFT training.
 
 **Output:**
 - `dpo_pairs.jsonl` - Minimal format for debugging/analysis
-- `dpo_training.jsonl` - Full format for TRL DPOTrainer
+- `dpo_training.jsonl` - Full format for training (DPO uses both columns, SFT uses "chosen" only)
 
-### Stage 4: Train with DPO
+### Stage 4: Train Model
 
+Choose a training method:
+
+**Option A: DPO (Direct Preference Optimization)**
 ```bash
-python train_dpo_lora.py \
+python train_dpo.py \
     --dataset_path ./results/dpo_pairs_boolq_100e40c/dpo_training.jsonl \
     --output_dir ./results/dpo_model_boolq_100e40c \
-    --max_steps 200 \
-    --use_4bit \
-    --bf16 \
-    --gradient_checkpointing
+    --max_steps 200 --use_4bit --bf16 --gradient_checkpointing
 ```
 
-Fine-tunes the model using DPO with QLoRA (4-bit quantization).
+**Option B: SFT (Supervised Fine-Tuning on chosen CFs only)**
+```bash
+python train_sft.py \
+    --dataset_path ./results/dpo_pairs_boolq_100e40c/dpo_training.jsonl \
+    --output_dir ./results/sft_model_boolq_100e40c \
+    --max_steps 200 --use_4bit --bf16 --gradient_checkpointing
+```
 
-**Output:** `results/dpo_model_{dataset}_{suffix}/` (LoRA adapter)
+Both methods use QLoRA (4-bit quantization) and produce LoRA adapters.
+
+**Output:** `results/{dpo,sft}_model_{dataset}_{suffix}/` (LoRA adapter)
 
 ### Stage 5: Evaluate Models
 
 ```bash
 python evaluate_models.py \
-    --dpo_model_path ./results/dpo_model_boolq_100e40c \
+    --dpo_model_path ./results/dpo_model_boolq_100e40c \  # or sft_model_*
     --datasets boolq \
     --split validation \
-    --num_samples 20 \
+    --num_samples 50 \
     --cfs_per_entry 5 \
     --output_dir ./results/evaluation_boolq_100e40c \
-    --resume  # Optional: resume from previous progress
+    --base_eval_dir ./results/evaluation_boolq_prev \    # Optional: reuse base CFs for fair A/B
+    --resume
 ```
 
-Compares base model vs DPO-tuned model on held-out validation data:
+Compares base model vs fine-tuned model (DPO, SFT, or any LoRA adapter) on held-out validation data:
 
 | Metric | Description |
 |--------|-------------|
@@ -117,18 +168,13 @@ Compares base model vs DPO-tuned model on held-out validation data:
 | **Label Flip Rate (LFR)** | % of CFs where the model's prediction changed (higher = better) |
 | **Perplexity (PPL)** | Fluency of generated text (lower = more natural) |
 
-**Important**: LFR is computed by comparing each CF's label to the BASE model's prediction on the **original input** (not ground truth). This measures "did the edit change the model's mind?" rather than "did we hit the target label?"
+**Key details:**
+- LFR compares against the BASE model's prediction on the **original input** (not ground truth)
+- BASE model is the judge for ALL counterfactuals (ensures fair comparison)
+- Use `--base_eval_dir` to reuse base model CFs when comparing different training configs
+- For SNLI, same entry indices are used for both premise/hypothesis variants
 
-**Fair comparison**: The BASE model is used as the judge for ALL counterfactuals (both base-generated and DPO-generated).
-
-**Notes:** 
-- For SNLI datasets, the same entry indices are used for both `snli_premise` and `snli_hypothesis` to ensure fair comparison on identical NLI pairs.
-- Supports deduplication, progressive saves (`--resume`), and resume capability.
-
-**Output:** 
-- `results/evaluation_{dataset}_{suffix}/original_predictions.json` - Base model predictions on original inputs
-- `results/evaluation_{dataset}_{suffix}/eval_report.md` - Human-readable comparison
-- `results/evaluation_{dataset}_{suffix}/eval_summary.json` - Structured metrics
+**Output:** `results/evaluation_{dataset}_{suffix}/` with `eval_report.md`, `eval_summary.json`
 
 ---
 
@@ -164,18 +210,18 @@ SUFFIX="${ENTRIES}e${CFS}c"
 
 ## Design Choices
 
-### DPO Pair Selection: 1-to-1 Pairing with Hard Weighting
+### Training Data Construction: 1-to-1 Pairing with Hard Weighting
 
 We use **1-to-1 pairing** to create strong contrasts between chosen and rejected examples:
 
 ```
-Unified Score = correctness_bonus + (confidence × similarity)
+Unified Score = flip_bonus + (confidence × similarity)
 
-where correctness_bonus = 100 if label flip succeeded, 0 otherwise
+where flip_bonus = 100 if model's prediction changed from original, 0 otherwise
 ```
 
 **Selection rules:**
-1. **Chosen pool**: Only CFs that successfully flipped the label (`is_correct=True`)
+1. **Chosen pool**: Only CFs where the model's prediction changed from original (`label_flipped=True`)
 2. **Rejected pool**: All valid CFs, sorted by unified score (worst first)
 
 **Pairing:**
@@ -198,6 +244,10 @@ Before (N×N = 4 pairs):          After (1-to-1 = 2 pairs):
 - Each pair has maximum contrast between best and worst
 - Avoids weak pairs like second-best↔second-worst in N×N
 - Hard weighting ensures correct CFs rank above incorrect CFs
+
+**Method-specific usage:**
+- **DPO**: Uses both chosen and rejected columns for preference learning
+- **SFT**: Uses only the "chosen" column (ignores rejected)
 
 ### Diverse Generation with Deduplication
 
@@ -230,12 +280,14 @@ We store only essential data to minimize file sizes:
   "edited_text": "The actual edited content",
   "target_label": "entailment",
   "parse_success": true,
-  "is_correct": true,
-  "predicted_label": "entailment",
+  "label_flipped": true,
+  "predicted_label": "contradiction",
   "confidence": 0.95,
   "semantic_similarity": 0.87
 }
 ```
+
+Note: `label_flipped` indicates whether the model's prediction changed from the original (stored in entry's `original_prediction` field), not whether it matched the target label.
 
 **DPO Pairs** (`dpo_pairs.jsonl` - minimal, for debugging):
 ```json
@@ -247,7 +299,8 @@ We store only essential data to minimize file sizes:
   "rejected_text": "Edited text without tags",
   "chosen_target_label": "false",
   "chosen_unified_score": 100.85,
-  "chosen_is_correct": true
+  "chosen_label_flipped": true,
+  "pair_rank": 1
 }
 ```
 
@@ -291,8 +344,16 @@ cfg-dpo/
 │
 ├── generate_counterfactuals.py    # Stage 1: Generate CFs
 ├── evaluate_counterfactuals.py    # Stage 2: Evaluate CFs
-├── construct_dpo_pairs.py         # Stage 3: Build DPO pairs
-├── train_dpo_lora.py              # Stage 4: DPO training
+├── construct_dpo_pairs.py         # Stage 3: Build training data
+│
+│   # Training scripts (offline methods)
+├── train_dpo.py                   # Stage 4: DPO training
+├── train_sft.py                   # Stage 4: SFT training (chosen only)
+│
+│   # Training scripts (online methods - planned)
+├── train_grpo.py                  # Stage 4: GRPO (generation during training)
+├── train_gdpo.py                  # Stage 4: GDPO (iterative gen→train cycles)
+│
 ├── evaluate_models.py             # Stage 5: Model comparison
 │
 ├── requirements.txt
@@ -312,7 +373,9 @@ cfg-dpo/
 └── results/                       # Output files (gitignored)
     ├── counterfactuals_{suffix}/
     ├── dpo_pairs_{dataset}_{suffix}/
+    ├── sft_data_{dataset}_{suffix}/
     ├── dpo_model_{dataset}_{suffix}/
+    ├── sft_model_{dataset}_{suffix}/
     └── evaluation_{dataset}_{suffix}/
 ```
 
@@ -344,15 +407,36 @@ Results are saved after each stage, allowing pipeline resumption:
 | Stage | Output File | Description |
 |-------|-------------|-------------|
 | 1 | `counterfactuals_{suffix}/{dataset}_progress.jsonl` | Raw generated CFs |
+| 2 | `counterfactuals_{suffix}/{dataset}_original_predictions.json` | Model's predictions on original inputs |
 | 2 | `counterfactuals_{suffix}/{dataset}_evaluated.jsonl` | CFs with evaluation scores |
-| 3 | `dpo_pairs_{dataset}_{suffix}/dpo_pairs.jsonl` | Minimal pairs for debugging |
-| 3 | `dpo_pairs_{dataset}_{suffix}/dpo_training.jsonl` | Full format for training |
-| 4 | `dpo_model_{dataset}_{suffix}/` | LoRA adapter weights |
-| 5 | `evaluation_{dataset}_{suffix}/original_predictions.json` | Base model predictions on originals |
-| 5 | `evaluation_{dataset}_{suffix}/base_cfs_progress.jsonl` | Base model CF generation progress |
-| 5 | `evaluation_{dataset}_{suffix}/dpo_cfs_progress.jsonl` | DPO model CF generation progress |
+| 3 | `dpo_pairs_{dataset}_{suffix}/dpo_training.jsonl` | Training data (DPO uses both, SFT uses "chosen") |
+| 4 | `{dpo,sft}_model_{dataset}_{suffix}/` | LoRA adapter weights |
 | 5 | `evaluation_{dataset}_{suffix}/eval_report.md` | Human-readable comparison |
 | 5 | `evaluation_{dataset}_{suffix}/eval_summary.json` | Structured metrics |
+
+## Parallel Execution (Large-Scale Runs)
+
+For large datasets (e.g., 2000+ entries), Stage 1 can be parallelized using SLURM array jobs:
+
+```bash
+# Step 1: Submit parallel Stage 1 jobs (20 shards × 100 entries each = 2000 total)
+sbatch run_parallel_stage1.sh
+
+# Step 2: After ALL Stage 1 jobs complete, merge and run Stages 2-5
+sbatch run_stages_2to5.sh
+```
+
+**Configuration** (edit at top of scripts):
+```bash
+TOTAL_ENTRIES=2000
+ENTRIES_PER_SHARD=400  # Creates 5 shards (#SBATCH --array=0-4)
+CFS=40
+DATASETS="boolq snli_premise snli_hypothesis"
+```
+
+**How it works:**
+1. `run_parallel_stage1.sh`: Each array task processes a shard (e.g., entries 0-99, 100-199, etc.)
+2. `run_stages_2to5.sh`: Merges shard files, then runs Stages 2-5 sequentially per dataset
 
 ## Environment Variables
 

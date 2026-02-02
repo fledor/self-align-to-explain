@@ -48,3 +48,6 @@ env/
 .DS_Store
 Thumbs.db
 
+# Run scripts
+*.sh
+
