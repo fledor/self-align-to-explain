@@ -73,6 +73,26 @@ def get_parser() -> argparse.ArgumentParser:
         help="Resume from previous progress",
     )
     
+    # Sharding arguments for parallel execution
+    parser.add_argument(
+        "--start_idx",
+        type=int,
+        default=0,
+        help="Starting entry index for sharding (default: 0)",
+    )
+    parser.add_argument(
+        "--end_idx",
+        type=int,
+        default=None,
+        help="Ending entry index for sharding (default: None = all)",
+    )
+    parser.add_argument(
+        "--shard_id",
+        type=str,
+        default=None,
+        help="Shard identifier for output file naming (e.g., '0', '1', etc.)",
+    )
+    
     return parser
 
 
@@ -260,6 +280,8 @@ def main():
     print(f"Datasets: {args.datasets}")
     print(f"CFs per entry: {args.cfs_per_entry}")
     print(f"Output: {args.output_dir}")
+    if args.shard_id is not None:
+        print(f"Shard: {args.shard_id} (entries {args.start_idx}:{args.end_idx})")
     print("=" * 60)
     
     # Ensure directories exist
@@ -276,13 +298,23 @@ def main():
         dataset = get_dataset(dataset_name)
         entries = dataset.load(Config.DATA_DIR, args.split)
         
+        # Apply max_entries limit first (to define the full dataset scope)
         if args.max_entries:
             entries = entries[:args.max_entries]
+        
+        # Apply sharding: filter to [start_idx:end_idx] range
+        if args.start_idx > 0 or args.end_idx is not None:
+            end = args.end_idx if args.end_idx is not None else len(entries)
+            entries = entries[args.start_idx:end]
+            print(f"Shard range: entries {args.start_idx}:{end} ({len(entries)} entries)")
+        
+        # Determine output file suffix for sharding
+        shard_suffix = f"_shard{args.shard_id}" if args.shard_id is not None else ""
         
         # Check for existing progress
         processed_indices = set()
         if args.resume:
-            processed_indices = load_progress(args.output_dir, dataset_name)
+            processed_indices = load_progress(args.output_dir, dataset_name, shard_suffix)
             print(f"Resuming: {len(processed_indices)} entries already processed")
         
         # Filter to unprocessed entries
@@ -294,7 +326,7 @@ def main():
             continue
         
         # Process entries
-        progress_file = get_progress_file(args.output_dir, dataset_name)
+        progress_file = get_progress_file(args.output_dir, dataset_name, shard_suffix)
         
         for entry in tqdm(entries_to_process, desc=f"Generating CFs for {dataset_name}"):
             result = process_entry(

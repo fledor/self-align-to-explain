@@ -2,14 +2,18 @@
 Counterfactual Evaluation Script.
 
 Evaluates generated counterfactuals on:
-- Correctness: Whether the label flip was achieved (verified via LLM)
+- Label Flip: Whether the model's prediction changed from original (model-based LFR)
 - Confidence: Model's confidence in the classification
 - Semantic Similarity: How similar the edited text is to the original
+
+Note: LFR is computed by comparing CF label to the model's ORIGINAL prediction
+(not ground truth), matching the evaluation approach in evaluate_models.py.
 """
 
 import argparse
-import re
+import json
 from pathlib import Path
+from typing import Optional
 
 import torch
 from sentence_transformers import SentenceTransformer
@@ -19,7 +23,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from config import Config
 from dataset_registry import get_dataset
 from prompts import get_verification_prompt, format_chat_messages
-from utils import load_jsonl, save_jsonl, normalize_label, parse_confidence
+from utils import load_jsonl, save_jsonl, save_json, load_json, normalize_label, parse_confidence
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -59,6 +63,11 @@ def get_parser() -> argparse.ArgumentParser:
         default=Config.ACTIVE_DATASETS,
         help=f"Datasets to evaluate (default: {Config.ACTIVE_DATASETS})",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from existing original_predictions.json if available",
+    )
     
     return parser
 
@@ -91,15 +100,15 @@ def load_semantic_model(model_name: str) -> SentenceTransformer:
     return SentenceTransformer(model_name)
 
 
-def verify_label(
+def predict_label(
     model,
     tokenizer,
     verification_inputs: dict,
     dataset_name: str,
     dataset,
-) -> tuple[str, float]:
+) -> tuple[Optional[str], float]:
     """
-    Verify the label using the LLM.
+    Predict the label using the LLM.
     
     Args:
         model: The language model
@@ -125,12 +134,13 @@ def verify_label(
     
     model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
     
-    generated_ids = model.generate(
-        **model_inputs,
-        max_new_tokens=50,
-        do_sample=False,  # Greedy for consistency
-        pad_token_id=tokenizer.eos_token_id,
-    )
+    with torch.no_grad():
+        generated_ids = model.generate(
+            **model_inputs,
+            max_new_tokens=50,
+            do_sample=False,  # Greedy for consistency
+            pad_token_id=tokenizer.eos_token_id,
+        )
     
     generated_ids = [
         output_ids[len(input_ids):]
@@ -148,6 +158,80 @@ def verify_label(
         confidence = 0.5  # Default confidence if not found
     
     return predicted_label, confidence
+
+
+def compute_original_predictions(
+    model,
+    tokenizer,
+    entries: list[dict],
+    dataset,
+    dataset_name: str,
+    output_dir: Path,
+    resume: bool = False,
+) -> dict:
+    """
+    Compute model's predictions on original (unedited) inputs.
+    
+    This is used as the reference for computing LFR - we measure whether
+    the edit changed the model's prediction, not whether it matches ground truth.
+    
+    Args:
+        model: The language model
+        tokenizer: The tokenizer
+        entries: List of dataset entries
+        dataset: The dataset object
+        dataset_name: Name of the dataset
+        output_dir: Output directory for saving predictions
+        resume: Whether to load existing predictions
+        
+    Returns:
+        Dictionary mapping entry_idx to (predicted_label, confidence)
+    """
+    predictions_file = output_dir / f"{dataset_name}_original_predictions.json"
+    
+    # Load existing predictions if resuming
+    if resume and predictions_file.exists():
+        print(f"  Loading existing original predictions from {predictions_file}")
+        saved = load_json(str(predictions_file))
+        # Convert string keys back to int
+        predictions = {int(k): tuple(v) for k, v in saved.items()}
+        
+        # Check if we have predictions for all entries
+        missing = [e["idx"] for e in entries if e["idx"] not in predictions]
+        if not missing:
+            print(f"  All {len(predictions)} predictions loaded")
+            return predictions
+        else:
+            print(f"  Found {len(predictions)} predictions, {len(missing)} missing")
+    else:
+        predictions = {}
+    
+    print(f"  Computing original predictions for {dataset_name}...")
+    
+    for entry in tqdm(entries, desc=f"Original predictions - {dataset_name}"):
+        idx = entry["idx"]
+        
+        # Skip if already computed
+        if idx in predictions:
+            continue
+        
+        # Get verification inputs for original text
+        original_text = dataset.get_original_text(entry)
+        verification_inputs = dataset.get_verification_inputs(entry, original_text)
+        
+        predicted_label, confidence = predict_label(
+            model, tokenizer, verification_inputs, dataset_name, dataset
+        )
+        
+        predictions[idx] = (predicted_label, confidence)
+    
+    # Save predictions
+    # Convert int keys to strings for JSON
+    saved = {str(k): list(v) for k, v in predictions.items()}
+    save_json(saved, str(predictions_file))
+    print(f"  Saved original predictions to {predictions_file}")
+    
+    return predictions
 
 
 def compute_semantic_similarity(
@@ -190,6 +274,7 @@ def compute_semantic_similarity(
 
 def evaluate_entry(
     entry: dict,
+    original_prediction: tuple,
     model,
     tokenizer,
     semantic_model: SentenceTransformer,
@@ -200,6 +285,7 @@ def evaluate_entry(
     
     Args:
         entry: Entry with counterfactuals
+        original_prediction: Tuple of (original_label, original_confidence) for this entry
         model: Verification model
         tokenizer: Tokenizer
         semantic_model: Sentence transformer model
@@ -209,6 +295,7 @@ def evaluate_entry(
         Entry with evaluation scores added
     """
     dataset_name = entry["dataset_name"]
+    original_label, _ = original_prediction
     
     # Get original text using dataset method
     original_text = dataset.get_original_text(entry)
@@ -232,12 +319,15 @@ def evaluate_entry(
             edited_texts,
         )
     
+    # Store original prediction in entry for reference
+    entry["original_prediction"] = original_label
+    
     # Evaluate each counterfactual
     sim_idx = 0
     for i, cf in enumerate(entry["counterfactuals"]):
         if cf["edited_text"] is None:
             # No valid edit - mark as failed
-            cf["is_correct"] = False
+            cf["label_flipped"] = False
             cf["predicted_label"] = None
             cf["confidence"] = 0.0
             cf["semantic_similarity"] = 0.0
@@ -246,8 +336,8 @@ def evaluate_entry(
         # Get verification inputs using dataset method
         verification_inputs = dataset.get_verification_inputs(entry, cf["edited_text"])
         
-        # Verify label
-        predicted_label, confidence = verify_label(
+        # Predict label for CF
+        predicted_label, confidence = predict_label(
             model=model,
             tokenizer=tokenizer,
             verification_inputs=verification_inputs,
@@ -255,11 +345,11 @@ def evaluate_entry(
             dataset=dataset,
         )
         
-        # Check correctness
-        target_label = normalize_label(cf["target_label"])
-        is_correct = (
+        # Check if label flipped (compared to original prediction, not target)
+        label_flipped = (
+            original_label is not None and
             predicted_label is not None and
-            normalize_label(predicted_label) == target_label
+            normalize_label(predicted_label) != normalize_label(original_label)
         )
         
         # Get semantic similarity
@@ -267,7 +357,7 @@ def evaluate_entry(
         sim_idx += 1
         
         # Update counterfactual with evaluation
-        cf["is_correct"] = is_correct
+        cf["label_flipped"] = label_flipped
         cf["predicted_label"] = predicted_label
         cf["confidence"] = confidence
         cf["semantic_similarity"] = semantic_similarity
@@ -286,10 +376,15 @@ def main():
     print(f"Output: {args.output_dir}")
     print(f"Verification model: {args.model_name}")
     print(f"Semantic model: {args.semantic_model}")
+    print(f"Resume: {args.resume}")
+    print("")
+    print("LFR = % where model's prediction changed from original")
+    print("(comparing to model's own prediction, not ground truth)")
     print("=" * 60)
     
     # Ensure output directory exists
-    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     
     # Load models
     model, tokenizer = load_verification_model(args.model_name, Config.MODEL_CACHE_DIR)
@@ -312,11 +407,28 @@ def main():
         entries = load_jsonl(str(input_file))
         print(f"  Loaded {len(entries)} entries")
         
-        # Evaluate each entry
+        # Step 1: Compute original predictions (model's prediction on unedited inputs)
+        print("\n  Step 1: Computing original predictions...")
+        original_predictions = compute_original_predictions(
+            model=model,
+            tokenizer=tokenizer,
+            entries=entries,
+            dataset=dataset,
+            dataset_name=dataset_name,
+            output_dir=output_dir,
+            resume=args.resume,
+        )
+        
+        # Step 2: Evaluate each entry's counterfactuals
+        print("\n  Step 2: Evaluating counterfactuals...")
         evaluated_entries = []
         for entry in tqdm(entries, desc=f"Evaluating {dataset_name}"):
+            idx = entry["idx"]
+            original_pred = original_predictions.get(idx, (None, 0.0))
+            
             evaluated_entry = evaluate_entry(
                 entry=entry,
+                original_prediction=original_pred,
                 model=model,
                 tokenizer=tokenizer,
                 semantic_model=semantic_model,
@@ -325,14 +437,14 @@ def main():
             evaluated_entries.append(evaluated_entry)
         
         # Save evaluated results
-        output_file = Path(args.output_dir) / f"{dataset_name}_evaluated.jsonl"
+        output_file = output_dir / f"{dataset_name}_evaluated.jsonl"
         save_jsonl(evaluated_entries, str(output_file))
-        print(f"  Saved to: {output_file}")
+        print(f"\n  Saved to: {output_file}")
         
         # Print summary statistics
         total_cfs = sum(len(e["counterfactuals"]) for e in evaluated_entries)
-        correct_cfs = sum(
-            sum(1 for cf in e["counterfactuals"] if cf.get("is_correct", False))
+        flipped_cfs = sum(
+            sum(1 for cf in e["counterfactuals"] if cf.get("label_flipped", False))
             for e in evaluated_entries
         )
         parsed_cfs = sum(
@@ -342,7 +454,7 @@ def main():
         
         print(f"  Total CFs: {total_cfs}")
         print(f"  Parsed successfully: {parsed_cfs} ({100*parsed_cfs/total_cfs:.1f}%)")
-        print(f"  Correct label flips: {correct_cfs} ({100*correct_cfs/total_cfs:.1f}%)")
+        print(f"  Label flips (LFR): {flipped_cfs} ({100*flipped_cfs/parsed_cfs:.1f}% of parsed)")
     
     print("\n" + "=" * 60)
     print("Evaluation complete!")
@@ -351,4 +463,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

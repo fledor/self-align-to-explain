@@ -175,32 +175,34 @@ def parse_confidence(response: str) -> Optional[float]:
     return None
 
 
-def get_progress_file(output_dir: str, dataset_name: str) -> Path:
+def get_progress_file(output_dir: str, dataset_name: str, suffix: str = "") -> Path:
     """
     Get the path to the progress file for a dataset.
     
     Args:
         output_dir: Base output directory
         dataset_name: Name of the dataset
+        suffix: Optional suffix (e.g., "_shard0" for sharded runs)
         
     Returns:
         Path to the progress JSONL file
     """
-    return Path(output_dir) / f"{dataset_name}_progress.jsonl"
+    return Path(output_dir) / f"{dataset_name}_progress{suffix}.jsonl"
 
 
-def load_progress(output_dir: str, dataset_name: str) -> set[int]:
+def load_progress(output_dir: str, dataset_name: str, suffix: str = "") -> set[int]:
     """
     Load the set of already-processed entry indices.
     
     Args:
         output_dir: Base output directory
         dataset_name: Name of the dataset
+        suffix: Optional suffix (e.g., "_shard0" for sharded runs)
         
     Returns:
         Set of processed entry indices
     """
-    progress_file = get_progress_file(output_dir, dataset_name)
+    progress_file = get_progress_file(output_dir, dataset_name, suffix)
     
     if not progress_file.exists():
         return set()
@@ -211,6 +213,64 @@ def load_progress(output_dir: str, dataset_name: str) -> set[int]:
             processed.add(item["idx"])
     
     return processed
+
+
+def merge_shard_files(input_dir: str, dataset_name: str, output_file: str = None) -> int:
+    """
+    Merge sharded progress files into a single file.
+    
+    Looks for files matching {dataset_name}_progress_shard*.jsonl and merges
+    them into {dataset_name}_progress.jsonl, sorted by entry index.
+    
+    Args:
+        input_dir: Directory containing shard files
+        dataset_name: Name of the dataset
+        output_file: Optional output file path (default: {dataset_name}_progress.jsonl)
+        
+    Returns:
+        Number of entries in the merged file
+    """
+    import glob
+    
+    input_path = Path(input_dir)
+    
+    # Find all shard files
+    pattern = str(input_path / f"{dataset_name}_progress_shard*.jsonl")
+    shard_files = sorted(glob.glob(pattern))
+    
+    if not shard_files:
+        print(f"No shard files found matching: {pattern}")
+        return 0
+    
+    print(f"Found {len(shard_files)} shard files for {dataset_name}")
+    
+    # Collect all entries
+    all_entries = []
+    for shard_file in shard_files:
+        entries = load_jsonl(shard_file)
+        all_entries.extend(entries)
+        print(f"  {Path(shard_file).name}: {len(entries)} entries")
+    
+    # Sort by entry index
+    all_entries.sort(key=lambda x: x.get("idx", 0))
+    
+    # Deduplicate by idx (in case of overlaps)
+    seen_idx = set()
+    unique_entries = []
+    for entry in all_entries:
+        idx = entry.get("idx")
+        if idx not in seen_idx:
+            unique_entries.append(entry)
+            seen_idx.add(idx)
+    
+    # Save merged file
+    if output_file is None:
+        output_file = str(input_path / f"{dataset_name}_progress.jsonl")
+    
+    save_jsonl(unique_entries, output_file)
+    print(f"Merged {len(unique_entries)} unique entries to: {output_file}")
+    
+    return len(unique_entries)
 
 
 def normalize_label(label: str) -> str:

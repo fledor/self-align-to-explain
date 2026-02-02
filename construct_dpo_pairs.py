@@ -2,13 +2,16 @@
 DPO Pair Construction Script.
 
 Constructs preference pairs from evaluated counterfactuals using unified ranking:
-- All CFs are ranked by a unified score (correctness heavily weighted)
-- Chosen: Top N from unified ranking (best quality)
-- Rejected: Bottom N from unified ranking (worst quality)
+- All CFs are ranked by a unified score (label flip heavily weighted)
+- Chosen: Must be CFs that successfully flipped the label (best-first)
+- Rejected: Bottom CFs from unified ranking (worst-first)
 
-Unified Score = correctness_bonus + (confidence × similarity)
-Where correctness_bonus = 100 if label flip succeeded, 0 otherwise.
-This ensures correct CFs always rank above incorrect ones.
+Unified Score = label_flip_bonus + (confidence × similarity)
+Where label_flip_bonus = 100 if label flip succeeded, 0 otherwise.
+This ensures flipped CFs always rank above non-flipped ones.
+
+Note: "label_flipped" means the model's prediction changed from the original
+(not that it matched the target label). This is consistent with evaluate_counterfactuals.py.
 """
 
 import argparse
@@ -72,9 +75,9 @@ def get_parser() -> argparse.ArgumentParser:
 
 def compute_unified_score(cf: dict) -> float:
     """
-    Compute unified quality score with hard weighting on correctness.
+    Compute unified quality score with hard weighting on label flipping.
     
-    Correct CFs always rank above incorrect CFs due to the large correctness bonus.
+    CFs that flipped the label always rank above those that didn't due to the large bonus.
     Within each group, ranking is by quality (confidence × similarity).
     
     Args:
@@ -83,12 +86,12 @@ def compute_unified_score(cf: dict) -> float:
     Returns:
         Unified score (higher = better)
     """
-    CORRECTNESS_WEIGHT = 100  # Ensures correct CFs always rank above incorrect
+    FLIP_WEIGHT = 100  # Ensures flipped CFs always rank above non-flipped
     
-    correct_bonus = CORRECTNESS_WEIGHT if cf.get("is_correct", False) else 0
+    flip_bonus = FLIP_WEIGHT if cf.get("label_flipped", False) else 0
     quality = cf.get("confidence", 0) * cf.get("semantic_similarity", 0)
     
-    return correct_bonus + quality
+    return flip_bonus + quality
 
 
 def select_dpo_candidates(
@@ -98,7 +101,7 @@ def select_dpo_candidates(
     """
     Select chosen and rejected candidates for 1-to-1 DPO pairing.
     
-    Chosen pool: Only CFs that successfully flipped the label (is_correct=True)
+    Chosen pool: Only CFs that successfully flipped the label (label_flipped=True)
     Rejected pool: All valid CFs, sorted worst-first
     
     Pairing is 1-to-1: best↔worst, 2nd-best↔2nd-worst (max 2 pairs per entry)
@@ -125,17 +128,17 @@ def select_dpo_candidates(
         cf["unified_score"] = compute_unified_score(cf)
     
     # Chosen pool: Only CFs that successfully flipped the label
-    correct_cfs = [cf for cf in valid_cfs if cf.get("is_correct", False)]
-    correct_cfs.sort(key=lambda x: x["unified_score"], reverse=True)  # Best first
+    flipped_cfs = [cf for cf in valid_cfs if cf.get("label_flipped", False)]
+    flipped_cfs.sort(key=lambda x: x["unified_score"], reverse=True)  # Best first
     
     # Rejected pool: All valid CFs sorted by score (worst first)
     all_cfs_worst_first = sorted(valid_cfs, key=lambda x: x["unified_score"])  # Worst first
     
-    # Need at least 1 correct CF for chosen and 1 CF for rejected
-    if not correct_cfs or not all_cfs_worst_first:
+    # Need at least 1 flipped CF for chosen and 1 CF for rejected
+    if not flipped_cfs or not all_cfs_worst_first:
         return [], []
     
-    return correct_cfs, all_cfs_worst_first
+    return flipped_cfs, all_cfs_worst_first
 
 
 def format_prompt_for_dpo(
@@ -252,8 +255,8 @@ def construct_pairs_for_entry(
             "rejected_target_label": rejected_cf["target_label"],
             "chosen_unified_score": chosen_cf.get("unified_score", 0),
             "rejected_unified_score": rejected_cf.get("unified_score", 0),
-            "chosen_is_correct": True,  # Always true now (filtered)
-            "rejected_is_correct": rejected_cf.get("is_correct", False),
+            "chosen_label_flipped": True,  # Always true now (filtered)
+            "rejected_label_flipped": rejected_cf.get("label_flipped", False),
             "pair_rank": i + 1,  # 1 = best↔worst, 2 = 2nd-best↔2nd-worst
         }
         
@@ -284,7 +287,7 @@ def main():
     print(f"Output: {args.output_dir}")
     print(f"Model: {args.model_name}")
     print(f"Max pairs per entry: {args.max_pairs} (1-to-1 pairing)")
-    print(f"Selection: chosen must flip label, rejected = worst scoring")
+    print(f"Selection: chosen must flip (model pred changed), rejected = worst")
     print("=" * 60)
     
     # Ensure output directory exists
