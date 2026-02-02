@@ -94,6 +94,12 @@ def get_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Resume from previous progress files",
     )
+    parser.add_argument(
+        "--base_eval_dir",
+        type=str,
+        default=None,
+        help="Path to previous evaluation dir to reuse base model CFs and predictions (for fair A/B comparisons)",
+    )
     
     return parser
 
@@ -602,7 +608,7 @@ def compute_metrics(cf_results: dict[str, list[dict]]) -> dict:
     return metrics
 
 
-def generate_report(base_metrics: dict, dpo_metrics: dict) -> str:
+def generate_report(base_metrics: dict, dpo_metrics: dict, base_eval_dir: str = None) -> str:
     """Generate a markdown comparison report."""
     report_lines = [
         "# Model Evaluation Report",
@@ -611,12 +617,21 @@ def generate_report(base_metrics: dict, dpo_metrics: dict) -> str:
         "",
         "**Note**: LFR measures whether the edit changed the BASE model's prediction",
         "(not whether it matched ground truth). BASE model is the judge for all CFs.",
+    ]
+    
+    if base_eval_dir:
+        report_lines.extend([
+            "",
+            f"**Base CFs reused from**: `{base_eval_dir}`",
+        ])
+    
+    report_lines.extend([
         "",
         "## Summary",
         "",
         "| Dataset | Model | LFR | Avg Edit Dist | Avg Norm Edit Dist | Avg PPL |",
         "|---------|-------|-----|---------------|-------------------|---------|",
-    ]
+    ])
     
     all_datasets = set(base_metrics.keys()) | set(dpo_metrics.keys())
     
@@ -685,10 +700,13 @@ def main():
     print(f"Samples per dataset: {args.num_samples}")
     print(f"CFs per entry: {args.cfs_per_entry}")
     print(f"Resume: {args.resume}")
+    print(f"Base eval dir: {args.base_eval_dir or 'None (will generate fresh)'}")
     print("")
     print("Evaluation approach:")
     print("  - LFR = % where BASE model's prediction changed (not ground truth)")
     print("  - BASE model judges ALL CFs (both base and DPO generated)")
+    if args.base_eval_dir:
+        print("  - REUSING base model CFs from previous evaluation (fair A/B comparison)")
     print("=" * 60)
     
     # Create output directory
@@ -708,31 +726,71 @@ def main():
     # Load base model
     base_model, tokenizer = load_base_model(args.base_model, Config.MODEL_CACHE_DIR)
     
-    # Step 1: Compute original predictions (base model on unedited inputs)
-    print("\n" + "=" * 60)
-    print("Step 1: Computing original predictions...")
-    print("=" * 60)
-    original_predictions = compute_original_predictions(
-        model=base_model,
-        tokenizer=tokenizer,
-        sampled_data=sampled_data,
-        output_dir=output_dir,
-        resume=args.resume,
-    )
-    
-    # Step 2: Generate CFs with base model
-    print("\n" + "=" * 60)
-    print("Step 2: Generating CFs with BASE model...")
-    print("=" * 60)
-    base_cf_results = generate_counterfactuals_for_model(
-        model=base_model,
-        tokenizer=tokenizer,
-        sampled_data=sampled_data,
-        cfs_per_entry=args.cfs_per_entry,
-        model_name="base",
-        output_dir=output_dir,
-        resume=args.resume,
-    )
+    # Check if we should reuse base evaluation from previous run
+    if args.base_eval_dir:
+        base_eval_path = Path(args.base_eval_dir)
+        print("\n" + "=" * 60)
+        print("Loading base model outputs from previous evaluation...")
+        print(f"Source: {args.base_eval_dir}")
+        print("=" * 60)
+        
+        # Load original predictions
+        orig_pred_file = base_eval_path / "original_predictions.json"
+        if not orig_pred_file.exists():
+            raise FileNotFoundError(f"original_predictions.json not found in {args.base_eval_dir}")
+        
+        with open(orig_pred_file) as f:
+            saved_predictions = json.load(f)
+        original_predictions = {}
+        for key, value in saved_predictions.items():
+            parts = key.split("|")
+            original_predictions[(parts[0], int(parts[1]))] = value
+        print(f"  Loaded {len(original_predictions)} original predictions")
+        
+        # Load base CFs
+        base_cfs_file = base_eval_path / "base_cfs_progress.jsonl"
+        if not base_cfs_file.exists():
+            raise FileNotFoundError(f"base_cfs_progress.jsonl not found in {args.base_eval_dir}")
+        
+        existing_base_cfs = load_jsonl(str(base_cfs_file))
+        base_cf_results = {}
+        for entry_result in existing_base_cfs:
+            ds_name = entry_result["dataset_name"]
+            if ds_name not in base_cf_results:
+                base_cf_results[ds_name] = []
+            base_cf_results[ds_name].append(entry_result)
+        print(f"  Loaded base CFs for {list(base_cf_results.keys())}")
+        
+        # Copy files to new output dir for reference
+        import shutil
+        shutil.copy(orig_pred_file, output_dir / "original_predictions.json")
+        shutil.copy(base_cfs_file, output_dir / "base_cfs_progress.jsonl")
+    else:
+        # Step 1: Compute original predictions (base model on unedited inputs)
+        print("\n" + "=" * 60)
+        print("Step 1: Computing original predictions...")
+        print("=" * 60)
+        original_predictions = compute_original_predictions(
+            model=base_model,
+            tokenizer=tokenizer,
+            sampled_data=sampled_data,
+            output_dir=output_dir,
+            resume=args.resume,
+        )
+        
+        # Step 2: Generate CFs with base model
+        print("\n" + "=" * 60)
+        print("Step 2: Generating CFs with BASE model...")
+        print("=" * 60)
+        base_cf_results = generate_counterfactuals_for_model(
+            model=base_model,
+            tokenizer=tokenizer,
+            sampled_data=sampled_data,
+            cfs_per_entry=args.cfs_per_entry,
+            model_name="base",
+            output_dir=output_dir,
+            resume=args.resume,
+        )
     
     # Step 3: Generate CFs with DPO model
     print("\n" + "=" * 60)
@@ -816,7 +874,7 @@ def main():
     }, str(output_dir / "eval_full.json"))
     
     # Generate and save report
-    report = generate_report(base_metrics, dpo_metrics)
+    report = generate_report(base_metrics, dpo_metrics, args.base_eval_dir)
     with open(output_dir / "eval_report.md", "w") as f:
         f.write(report)
     
