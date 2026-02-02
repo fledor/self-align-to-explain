@@ -1,17 +1,21 @@
 """
-DPO Training Script with LoRA Adapters
-=======================================
+SFT Training Script with LoRA Adapters
+======================================
 
-This script fine-tunes a model using DPO (Direct Preference Optimization)
-with LoRA adapters on counterfactual preference pairs.
+This script fine-tunes a model using Supervised Fine-Tuning (SFT)
+with LoRA adapters on successful counterfactuals (chosen examples from DPO pairs).
+
+Unlike DPO which learns from preference pairs (chosen vs rejected),
+SFT trains directly on the chosen/successful counterfactuals only.
 
 Usage:
-    python train_dpo_lora.py \
-        --dataset_path ./results/dpo_pairs/dpo_training.jsonl \
-        --output_dir ./qwen7b-dpo-lora \
-        --num_train_epochs 1
+    python train_sft.py \
+        --dataset_path ./results/dpo_pairs_boolq_100e40c/dpo_training.jsonl \
+        --output_dir ./results/sft_model_boolq_100e40c \
+        --max_steps 200
 
-The preference dataset should have columns: "prompt", "chosen", "rejected"
+The dataset should have columns: "prompt", "chosen" (from DPO format)
+or can be a custom SFT format with "prompt", "completion".
 """
 
 import argparse
@@ -22,13 +26,13 @@ import torch
 from datasets import load_dataset, Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
-from trl import DPOConfig, DPOTrainer
+from trl import SFTConfig, SFTTrainer
 
 from config import Config
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="DPO Training with LoRA")
+    parser = argparse.ArgumentParser(description="SFT Training with LoRA")
     
     # Model arguments
     parser.add_argument(
@@ -48,8 +52,8 @@ def parse_args():
     parser.add_argument(
         "--dataset_path",
         type=str,
-        default=os.path.join(Config.DPO_DATASET_DIR, "dpo_training.jsonl"),
-        help=f"Path to the preference dataset (default: {Config.DPO_DATASET_DIR}/dpo_training.jsonl)",
+        required=True,
+        help="Path to the training dataset (DPO format: uses 'chosen' column)",
     )
     parser.add_argument(
         "--dataset_split",
@@ -107,8 +111,8 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default=os.path.join(Config.OUTPUT_DIR, "dpo_model"),
-        help=f"Output directory for model checkpoints (default: {Config.OUTPUT_DIR}/dpo_model)",
+        default=os.path.join(Config.OUTPUT_DIR, "sft_model"),
+        help=f"Output directory for model checkpoints (default: {Config.OUTPUT_DIR}/sft_model)",
     )
     parser.add_argument(
         "--num_train_epochs",
@@ -141,16 +145,10 @@ def parse_args():
         help="Learning rate",
     )
     parser.add_argument(
-        "--max_length",
+        "--max_seq_length",
         type=int,
         default=1024,
         help="Maximum sequence length",
-    )
-    parser.add_argument(
-        "--max_prompt_length",
-        type=int,
-        default=512,
-        help="Maximum prompt length",
     )
     parser.add_argument(
         "--gradient_checkpointing",
@@ -168,21 +166,6 @@ def parse_args():
         help="Use float16 precision",
     )
     
-    # DPO specific arguments
-    parser.add_argument(
-        "--beta",
-        type=float,
-        default=0.1,
-        help="DPO beta parameter (KL penalty coefficient)",
-    )
-    parser.add_argument(
-        "--loss_type",
-        type=str,
-        default="sigmoid",
-        choices=["sigmoid", "hinge", "ipo", "kto_pair"],
-        help="DPO loss type",
-    )
-    
     # Logging arguments
     parser.add_argument(
         "--logging_steps",
@@ -197,12 +180,6 @@ def parse_args():
         help="Save checkpoint every X steps",
     )
     parser.add_argument(
-        "--eval_steps",
-        type=int,
-        default=100,
-        help="Evaluate every X steps",
-    )
-    parser.add_argument(
         "--warmup_ratio",
         type=float,
         default=0.1,
@@ -212,19 +189,18 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_preference_dataset(dataset_path: str, split: str, max_samples: Optional[int] = None):
+def load_sft_dataset(dataset_path: str, split: str, max_samples: Optional[int] = None):
     """
-    Load preference dataset from local path or HuggingFace.
+    Load dataset and convert to SFT format.
     
-    Expected format:
-    - prompt: The input prompt/question
-    - chosen: The preferred response
-    - rejected: The non-preferred response
+    If the dataset has DPO format (prompt, chosen, rejected), we use only
+    the "chosen" examples for SFT.
+    
+    Returns dataset with "text" column containing formatted prompt+completion.
     """
-    # Try loading from HuggingFace first
+    # Load dataset
     try:
         if os.path.exists(dataset_path):
-            # Local file (JSON, JSONL, CSV, or Parquet)
             if dataset_path.endswith(".json") or dataset_path.endswith(".jsonl"):
                 dataset = load_dataset("json", data_files=dataset_path, split=split)
             elif dataset_path.endswith(".csv"):
@@ -232,10 +208,8 @@ def load_preference_dataset(dataset_path: str, split: str, max_samples: Optional
             elif dataset_path.endswith(".parquet"):
                 dataset = load_dataset("parquet", data_files=dataset_path, split=split)
             else:
-                # Assume it's a directory with dataset files
                 dataset = load_dataset(dataset_path, split=split)
         else:
-            # HuggingFace dataset
             dataset = load_dataset(dataset_path, split=split)
     except Exception as e:
         raise ValueError(f"Failed to load dataset from {dataset_path}: {e}")
@@ -244,14 +218,35 @@ def load_preference_dataset(dataset_path: str, split: str, max_samples: Optional
     if max_samples is not None and max_samples > 0:
         dataset = dataset.select(range(min(max_samples, len(dataset))))
     
-    # Validate required columns
-    required_columns = {"prompt", "chosen", "rejected"}
-    missing_columns = required_columns - set(dataset.column_names)
-    if missing_columns:
+    # Check format and convert to SFT format
+    columns = set(dataset.column_names)
+    
+    if "text" in columns:
+        # Already in SFT format
+        print(f"Dataset already has 'text' column, using as-is")
+    elif "prompt" in columns and "chosen" in columns:
+        # DPO format - extract prompt + chosen
+        print(f"Converting DPO format to SFT format (using 'chosen' as completion)")
+        
+        def format_for_sft(example):
+            # Combine prompt and chosen response
+            # The prompt already contains the system/user messages
+            # We just need to add the chosen response
+            return {"text": example["prompt"] + example["chosen"]}
+        
+        dataset = dataset.map(format_for_sft, remove_columns=["rejected"] if "rejected" in columns else [])
+    elif "prompt" in columns and "completion" in columns:
+        # Standard SFT format
+        print(f"Converting prompt+completion format to SFT format")
+        
+        def format_for_sft(example):
+            return {"text": example["prompt"] + example["completion"]}
+        
+        dataset = dataset.map(format_for_sft)
+    else:
         raise ValueError(
-            f"Dataset is missing required columns: {missing_columns}. "
-            f"Available columns: {dataset.column_names}. "
-            f"Expected columns: {required_columns}"
+            f"Dataset must have either 'text' column, or 'prompt'+'chosen' (DPO), "
+            f"or 'prompt'+'completion'. Found columns: {columns}"
         )
     
     print(f"Loaded {len(dataset)} samples from {dataset_path}")
@@ -276,12 +271,15 @@ def main():
     args = parse_args()
     
     print("=" * 60)
-    print("DPO Training with LoRA Adapters")
+    print("SFT Training with LoRA Adapters")
     print("=" * 60)
     print(f"Model: {args.model_name_or_path}")
     print(f"Dataset: {args.dataset_path}")
     print(f"Output: {args.output_dir}")
     print(f"LoRA rank: {args.lora_r}, alpha: {args.lora_alpha}")
+    print("=" * 60)
+    print("")
+    print("Note: SFT trains on successful counterfactuals only (no rejected examples)")
     print("=" * 60)
     
     # Load tokenizer
@@ -293,7 +291,7 @@ def main():
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "left"  # For decoder-only models
+    tokenizer.padding_side = "right"  # SFT typically uses right padding
     
     # Get quantization config
     quantization_config = get_quantization_config(args)
@@ -341,42 +339,38 @@ def main():
     
     # Load dataset
     print("\n📊 Loading dataset...")
-    train_dataset = load_preference_dataset(
+    train_dataset = load_sft_dataset(
         args.dataset_path,
         args.dataset_split,
         args.max_samples,
     )
     
-    # Configure DPO training
-    print("\n⚙️ Configuring DPO trainer...")
-    training_args = DPOConfig(
+    # Configure SFT training
+    print("\n⚙️ Configuring SFT trainer...")
+    training_args = SFTConfig(
         output_dir=args.output_dir,
         num_train_epochs=args.num_train_epochs,
         max_steps=args.max_steps if args.max_steps > 0 else -1,
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
-        max_length=args.max_length,
-        max_prompt_length=args.max_prompt_length,
-        beta=args.beta,
-        loss_type=args.loss_type,
+        max_seq_length=args.max_seq_length,
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         warmup_ratio=args.warmup_ratio,
         bf16=args.bf16,
         fp16=args.fp16,
         gradient_checkpointing=args.gradient_checkpointing,
-        remove_unused_columns=False,
         optim="adamw_torch",
         lr_scheduler_type="cosine",
         report_to="none",  # Disable wandb/tensorboard by default
+        dataset_text_field="text",  # Column containing the training text
+        packing=False,  # Don't pack multiple samples into one sequence
     )
     
-    # Initialize DPO Trainer
-    # When using LoRA, we don't need a reference model as it's computed implicitly
-    trainer = DPOTrainer(
+    # Initialize SFT Trainer
+    trainer = SFTTrainer(
         model=model,
-        ref_model=None,  # Not needed with LoRA - computed from frozen base weights
         args=training_args,
         train_dataset=train_dataset,
         processing_class=tokenizer,
@@ -410,4 +404,3 @@ tokenizer = AutoTokenizer.from_pretrained("{args.output_dir}")
 
 if __name__ == "__main__":
     main()
-
