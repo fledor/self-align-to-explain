@@ -1,8 +1,12 @@
-# Counterfactual Generation with Preference Optimization
+# Self-Align to Explain
 
-**Working Thesis Title:** *From Offline to Online: Comparing DPO, SFT, GRPO, and GDPO for Counterfactual Text Generation*
+**Thesis Title:** *Self-Align to Explain: Comparing Post-Training Methods for Counterfactual Generation*
 
-A research pipeline for generating diverse counterfactuals from classification datasets, training language models with various preference optimization methods, and comparing their effectiveness.
+**Abstract:** This thesis compares post-training self-alignment methods for counterfactual example generation. Using self-generated training data, we evaluate SFT, DPO, GRPO, and GDPO on their ability to produce minimal edits that flip classifier predictions.
+
+---
+
+A research pipeline for generating diverse counterfactuals from classification datasets, training language models with various post-training methods, and comparing their effectiveness.
 
 ## Research Goal
 
@@ -129,18 +133,24 @@ Choose a training method:
 **Option A: DPO (Direct Preference Optimization)**
 ```bash
 python train_dpo.py \
-    --dataset_path ./results/dpo_pairs_boolq_100e40c/dpo_training.jsonl \
-    --output_dir ./results/dpo_model_boolq_100e40c \
-    --max_steps 200 --use_4bit --bf16 --gradient_checkpointing
+    --dataset_path ./results/dpo_pairs_boolq_2000e40c_1pair/dpo_training.jsonl \
+    --output_dir ./results/dpo_model_boolq_1pair_b4_2ep \
+    --num_train_epochs 2 --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
+    --use_4bit --bf16 --gradient_checkpointing \
+    --use_wandb --wandb_run_name "dpo-1pair-b4-2ep-boolq"
 ```
 
 **Option B: SFT (Supervised Fine-Tuning on chosen CFs only)**
 ```bash
 python train_sft.py \
-    --dataset_path ./results/dpo_pairs_boolq_100e40c/dpo_training.jsonl \
-    --output_dir ./results/sft_model_boolq_100e40c \
-    --max_steps 200 --use_4bit --bf16 --gradient_checkpointing
+    --dataset_path ./results/dpo_pairs_boolq_2000e40c_1pair/dpo_training.jsonl \
+    --output_dir ./results/sft_model_boolq_1pair_b4_1ep \
+    --num_train_epochs 1 --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
+    --use_4bit --bf16 --gradient_checkpointing \
+    --use_wandb --wandb_run_name "sft-1pair-b4-1ep-boolq"
 ```
+
+> **Note**: Prefer `--num_train_epochs` over `--max_steps`. Fixed step counts confound batch size with training duration (see RESULTS.md).
 
 Both methods use QLoRA (4-bit quantization) and produce LoRA adapters.
 
@@ -317,6 +327,28 @@ Note: Chosen/rejected responses are stored as plain text (edit tags removed) sin
 
 ---
 
+## Current Results
+
+See `RESULTS.md` for full experimental results and `OVERVIEW.md` for a detailed analysis of all runs.
+
+### Best results per method (LFR improvement over base)
+
+| Method | BoolQ | SNLI-Premise | SNLI-Hypothesis |
+|--------|:-----:|:------------:|:---------------:|
+| Base | 44.9% | 51.5% | 46.3% |
+| **DPO** (2-pair b4, 2ep) | **52.5%** (+9.3%) | **71.5%** (+17.4%) | — |
+| **DPO** (1-pair b4, 2ep) | 50.7% (+8.1%) | 65.7% (+12.2%) | **54.3%** (+7.5%) |
+| SFT (best, ~0.3-0.5ep) | 49.2% (+4.1%) | 54.5% (+2.7%) | 45.3% (-0.8%) |
+
+**Key findings:**
+- **DPO outperforms SFT** on all datasets, winning every head-to-head comparison at equal training duration
+- **2 epochs** is optimal for DPO; SFT overfits quickly and peaks at ~0.3-0.5 epochs
+- **Smaller batch (b4)** with more gradient updates outperforms larger batch (b16) at equal epochs
+- **2-pair ≥ 1-pair** when trained long enough (the original "1-pair is better" finding was a training duration artifact — see RESULTS.md)
+- SFT can hurt performance (negative LFR on SNLI), while DPO consistently improves
+
+---
+
 ## Configuration
 
 All settings are centralized in `config.py`:
@@ -329,9 +361,15 @@ class Config:
     
     # High-temperature sampling for diversity
     TEMPERATURE = 1.2
-    TOP_P = 0.99  # High for maximum diversity
+    TOP_P = 0.99
     TOP_K = 100
 ```
+
+**Training configuration:**
+- LoRA: rank=32, alpha=16, dropout=0.05
+- Learning rate: 5e-6
+- Training duration: `num_train_epochs` (preferred) or `max_steps` (legacy; confounds batch size with training duration)
+- Batch size: 1-4 (with gradient accumulation for effective batch 4-16)
 
 ## Project Structure
 
@@ -350,9 +388,9 @@ cfg-dpo/
 ├── train_dpo.py                   # Stage 4: DPO training
 ├── train_sft.py                   # Stage 4: SFT training (chosen only)
 │
-│   # Training scripts (online methods - planned)
-├── train_grpo.py                  # Stage 4: GRPO (generation during training)
-├── train_gdpo.py                  # Stage 4: GDPO (iterative gen→train cycles)
+│   # Training scripts (online methods - TODO)
+│   # train_grpo.py                # Stage 4: GRPO (generation during training)
+│   # train_gdpo.py                # Stage 4: GDPO (iterative gen→train cycles)
 │
 ├── evaluate_models.py             # Stage 5: Model comparison
 │
@@ -373,9 +411,11 @@ cfg-dpo/
 └── results/                       # Output files (gitignored)
     ├── counterfactuals_{suffix}/
     ├── dpo_pairs_{dataset}_{suffix}/
-    ├── sft_data_{dataset}_{suffix}/
+    ├── dpo_pairs_{dataset}_{suffix}_1pair/
     ├── dpo_model_{dataset}_{suffix}/
+    ├── dpo_model_{dataset}_{suffix}_1pair/
     ├── sft_model_{dataset}_{suffix}/
+    ├── sft_model_{dataset}_{suffix}_1pair/
     └── evaluation_{dataset}_{suffix}/
 ```
 
@@ -441,6 +481,62 @@ DATASETS="boolq snli_premise snli_hypothesis"
 ## Environment Variables
 
 - `HF_TOKEN`: HuggingFace token for model access (optional, set in `~/.hf_token.env`)
+- `WANDB_API_KEY`: Weights & Biases API key for logging (required for experiment tracking)
+
+## Experiment Tracking with Weights & Biases
+
+All training scripts are configured to log metrics to [Weights & Biases](https://wandb.ai) for experiment tracking and visualization.
+
+**Configuration:**
+- **Entity:** `cfg-dpo`
+- **Project:** `Self-Align to Explain`
+- **Dashboard:** https://wandb.ai/cfg-dpo/Self-Align%20to%20Explain
+
+**Setup:**
+```bash
+# Option 1: Set environment variable
+export WANDB_API_KEY="your-api-key"
+
+# Option 2: Interactive login
+wandb login
+```
+
+**Logged metrics:**
+- Training loss curves (DPO loss, SFT loss)
+- Learning rate schedule
+- Gradient norms
+- Training/eval rewards (DPO)
+
+**Usage:**
+Training scripts automatically use W&B with `--use_wandb`. Run names follow the pattern: `{method}-{pairs}-{batch}-{dataset}` (e.g., `dpo-1pair-b16-boolq`).
+
+```bash
+# Already enabled in all run scripts
+python train_dpo.py ... --use_wandb --wandb_run_name "dpo-1pair-b4-boolq"
+python train_sft.py ... --use_wandb --wandb_run_name "sft-2pair-b16-snli_premise"
+```
+
+---
+
+## Future Work
+
+### Benchmark Evaluation
+
+After completing the comparison of post-training methods (SFT, DPO, GRPO, GDPO), we plan to evaluate all trained models on standard benchmarks to check for capability degradation (catastrophic forgetting):
+
+**Planned benchmarks:**
+- **MMLU** - Multitask Language Understanding
+- **HellaSwag** - Commonsense reasoning
+- **ARC** - AI2 Reasoning Challenge
+- **TruthfulQA** - Truthfulness evaluation
+
+**Goal:** Ensure that fine-tuning for counterfactual generation does not significantly degrade the model's general capabilities.
+
+### Online Methods
+
+Implement and compare online learning methods:
+- **GRPO** - Group Relative Policy Optimization (generation during training)
+- **GDPO** - Generalized DPO (iterative generation + training cycles)
 
 ## License
 
