@@ -21,7 +21,7 @@ from typing import Optional
 import torch
 from datasets import load_dataset, Dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training, PeftModel
 from trl import DPOConfig, DPOTrainer
 
 from config import Config
@@ -42,6 +42,12 @@ def parse_args():
         type=str,
         default=Config.HF_TOKEN,
         help="HuggingFace token for model access",
+    )
+    parser.add_argument(
+        "--base_adapter_path",
+        type=str,
+        default=None,
+        help="Path to a pre-trained LoRA adapter to load and merge before DPO training (e.g., SFT checkpoint)",
     )
     
     # Dataset arguments
@@ -209,6 +215,31 @@ def parse_args():
         help="Warmup ratio",
     )
     
+    # Weights & Biases arguments
+    parser.add_argument(
+        "--use_wandb",
+        action="store_true",
+        help="Enable Weights & Biases logging",
+    )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="Self-Align to Explain",
+        help="W&B project name (default: Self-Align to Explain)",
+    )
+    parser.add_argument(
+        "--wandb_entity",
+        type=str,
+        default="cfg-dpo",
+        help="W&B entity/team name (default: cfg-dpo)",
+    )
+    parser.add_argument(
+        "--wandb_run_name",
+        type=str,
+        default=None,
+        help="W&B run name (default: auto-generated)",
+    )
+    
     return parser.parse_args()
 
 
@@ -279,6 +310,8 @@ def main():
     print("DPO Training with LoRA Adapters")
     print("=" * 60)
     print(f"Model: {args.model_name_or_path}")
+    if args.base_adapter_path:
+        print(f"Base Adapter: {args.base_adapter_path} (will merge before DPO)")
     print(f"Dataset: {args.dataset_path}")
     print(f"Output: {args.output_dir}")
     print(f"LoRA rank: {args.lora_r}, alpha: {args.lora_alpha}")
@@ -328,6 +361,14 @@ def main():
     if args.gradient_checkpointing and quantization_config is None:
         model.gradient_checkpointing_enable()
     
+    # Load and merge base adapter if provided (e.g., SFT checkpoint for SFT→DPO training)
+    if args.base_adapter_path:
+        print(f"\n🔄 Loading base adapter from: {args.base_adapter_path}")
+        model = PeftModel.from_pretrained(model, args.base_adapter_path)
+        print("   Merging adapter weights into base model...")
+        model = model.merge_and_unload()
+        print("   Base adapter merged successfully!")
+    
     # Configure LoRA
     print("\n🔧 Configuring LoRA...")
     peft_config = LoraConfig(
@@ -346,6 +387,28 @@ def main():
         args.dataset_split,
         args.max_samples,
     )
+    
+    # Initialize W&B if enabled
+    if args.use_wandb:
+        import wandb
+        wandb.init(
+            entity=args.wandb_entity,
+            project=args.wandb_project,
+            name=args.wandb_run_name,
+            config={
+                "model": args.model_name_or_path,
+                "dataset": args.dataset_path,
+                "lora_r": args.lora_r,
+                "lora_alpha": args.lora_alpha,
+                "learning_rate": args.learning_rate,
+                "batch_size": args.per_device_train_batch_size,
+                "gradient_accumulation_steps": args.gradient_accumulation_steps,
+                "max_steps": args.max_steps,
+                "beta": args.beta,
+                "method": "dpo",
+            }
+        )
+        print(f"\n📊 W&B logging enabled: {args.wandb_entity}/{args.wandb_project}")
     
     # Configure DPO training
     print("\n⚙️ Configuring DPO trainer...")
@@ -369,7 +432,7 @@ def main():
         remove_unused_columns=False,
         optim="adamw_torch",
         lr_scheduler_type="cosine",
-        report_to="none",  # Disable wandb/tensorboard by default
+        report_to="wandb" if args.use_wandb else "none",
     )
     
     # Initialize DPO Trainer

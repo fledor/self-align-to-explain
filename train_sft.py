@@ -186,6 +186,31 @@ def parse_args():
         help="Warmup ratio",
     )
     
+    # Weights & Biases arguments
+    parser.add_argument(
+        "--use_wandb",
+        action="store_true",
+        help="Enable Weights & Biases logging",
+    )
+    parser.add_argument(
+        "--wandb_project",
+        type=str,
+        default="Self-Align to Explain",
+        help="W&B project name (default: Self-Align to Explain)",
+    )
+    parser.add_argument(
+        "--wandb_entity",
+        type=str,
+        default="cfg-dpo",
+        help="W&B entity/team name (default: cfg-dpo)",
+    )
+    parser.add_argument(
+        "--wandb_run_name",
+        type=str,
+        default=None,
+        help="W&B run name (default: auto-generated)",
+    )
+    
     return parser.parse_args()
 
 
@@ -228,13 +253,39 @@ def load_sft_dataset(dataset_path: str, split: str, max_samples: Optional[int] =
         # DPO format - extract prompt + chosen
         print(f"Converting DPO format to SFT format (using 'chosen' as completion)")
         
+        # Verify that all chosen examples are label-flipped by checking dpo_pairs.jsonl
+        pairs_file = os.path.join(os.path.dirname(dataset_path), "dpo_pairs.jsonl")
+        if os.path.exists(pairs_file):
+            import json
+            with open(pairs_file, 'r') as f:
+                pairs_data = [json.loads(line) for line in f]
+            
+            total_pairs = len(pairs_data)
+            flipped_count = sum(1 for p in pairs_data if p.get("chosen_label_flipped", False))
+            
+            print(f"")
+            print(f"  ✓ SFT Data Verification (from {os.path.basename(pairs_file)}):")
+            print(f"    Total pairs: {total_pairs}")
+            print(f"    Chosen examples with label_flipped=True: {flipped_count} ({flipped_count/total_pairs*100:.1f}%)")
+            
+            if flipped_count == total_pairs:
+                print(f"    ✓ All chosen examples successfully flip the label!")
+            else:
+                print(f"    ⚠ Warning: {total_pairs - flipped_count} chosen examples do NOT flip the label")
+            print(f"")
+        else:
+            print(f"  Note: dpo_pairs.jsonl not found, cannot verify label_flipped status")
+            print(f"  (By construction, all 'chosen' examples should have label_flipped=True)")
+        
         def format_for_sft(example):
             # Combine prompt and chosen response
             # The prompt already contains the system/user messages
             # We just need to add the chosen response
             return {"text": example["prompt"] + example["chosen"]}
         
-        dataset = dataset.map(format_for_sft, remove_columns=["rejected"] if "rejected" in columns else [])
+        # Remove all DPO columns to avoid TRL detecting them
+        remove_cols = [c for c in ["prompt", "chosen", "rejected"] if c in columns]
+        dataset = dataset.map(format_for_sft, remove_columns=remove_cols)
     elif "prompt" in columns and "completion" in columns:
         # Standard SFT format
         print(f"Converting prompt+completion format to SFT format")
@@ -345,6 +396,27 @@ def main():
         args.max_samples,
     )
     
+    # Initialize W&B if enabled
+    if args.use_wandb:
+        import wandb
+        wandb.init(
+            entity=args.wandb_entity,
+            project=args.wandb_project,
+            name=args.wandb_run_name,
+            config={
+                "model": args.model_name_or_path,
+                "dataset": args.dataset_path,
+                "lora_r": args.lora_r,
+                "lora_alpha": args.lora_alpha,
+                "learning_rate": args.learning_rate,
+                "batch_size": args.per_device_train_batch_size,
+                "gradient_accumulation_steps": args.gradient_accumulation_steps,
+                "max_steps": args.max_steps,
+                "method": "sft",
+            }
+        )
+        print(f"\n📊 W&B logging enabled: {args.wandb_entity}/{args.wandb_project}")
+    
     # Configure SFT training
     print("\n⚙️ Configuring SFT trainer...")
     training_args = SFTConfig(
@@ -354,7 +426,6 @@ def main():
         per_device_train_batch_size=args.per_device_train_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
-        max_seq_length=args.max_seq_length,
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
         warmup_ratio=args.warmup_ratio,
@@ -363,10 +434,13 @@ def main():
         gradient_checkpointing=args.gradient_checkpointing,
         optim="adamw_torch",
         lr_scheduler_type="cosine",
-        report_to="none",  # Disable wandb/tensorboard by default
+        report_to="wandb" if args.use_wandb else "none",
         dataset_text_field="text",  # Column containing the training text
         packing=False,  # Don't pack multiple samples into one sequence
     )
+    
+    # Set max sequence length on tokenizer
+    tokenizer.model_max_length = args.max_seq_length
     
     # Initialize SFT Trainer
     trainer = SFTTrainer(
