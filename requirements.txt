@@ -5,8 +5,8 @@
 torch>=2.1.0
 transformers>=4.40.0
 
-# TRL for DPO training
-trl>=0.8.0
+# TRL for DPO/GRPO training (GRPOTrainer requires >=0.15.0)
+trl>=0.15.0
 
 # PEFT for LoRA adapters
 peft>=0.10.0

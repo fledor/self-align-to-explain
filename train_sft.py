@@ -116,7 +116,7 @@ def parse_args():
     )
     parser.add_argument(
         "--num_train_epochs",
-        type=int,
+        type=float,
         default=1,
         help="Number of training epochs",
     )
