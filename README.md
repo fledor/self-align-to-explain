@@ -2,7 +2,7 @@
 
 **Thesis Title:** *Self-Align to Explain: Comparing Post-Training Methods for Counterfactual Generation*
 
-**Abstract:** This thesis compares post-training self-alignment methods for counterfactual example generation. Using self-generated training data, we evaluate SFT, DPO, GRPO, and GDPO on their ability to produce minimal edits that flip classifier predictions.
+**Abstract:** This thesis compares post-training self-alignment methods for counterfactual example generation. Using self-generated training data, we evaluate offline methods (SFT, DPO) and online RL methods (GRPO) on their ability to produce minimal edits that flip classifier predictions.
 
 ---
 
@@ -17,7 +17,7 @@ This project investigates how different training paradigms affect a language mod
 | **DPO** | Offline | Direct Preference Optimization on pre-generated preference pairs |
 | **SFT** | Offline | Supervised Fine-Tuning on successful counterfactuals only |
 | **GRPO** | Online | Group Relative Policy Optimization with generation during training |
-| **GDPO** | Online | Generalized DPO with iterative generation and training cycles |
+| **GDPO** | Online | Group reward-Decoupled normalization Policy Optimization (planned) |
 
 **Key distinction:** Offline methods train on pre-generated data (Stages 1-2), while online methods interleave generation and training.
 
@@ -30,8 +30,10 @@ The pipeline implements a multi-stage approach for **offline methods** (DPO, SFT
 1. **Generate** diverse counterfactuals using high-temperature sampling
 2. **Evaluate** counterfactuals on label flip rate, confidence, and semantic similarity
 3. **Construct** training data (preference pairs for DPO, successful CFs for SFT)
-4. **Train** the model with chosen method (DPO, SFT, or future: GRPO, GDPO)
+4. **Train** the model with chosen method (DPO, SFT)
 5. **Compare** base model vs fine-tuned model (edit distance, LFR, perplexity)
+
+For **online methods** (GRPO), the pipeline is simpler: the dataset is loaded directly, and generation + reward computation + learning happen within each training step.
 
 ```
 OFFLINE METHODS (DPO, SFT):
@@ -45,10 +47,14 @@ OFFLINE METHODS (DPO, SFT):
                    high temp          confidence,        chosen only (SFT)   model (LoRA)      LFR, PPL
                                       similarity
 
-ONLINE METHODS (GRPO, GDPO - planned):
+ONLINE METHODS (GRPO):
 ┌─────────────┐    ┌──────────────────────────────────────────────────────┐    ┌─────────────┐
-│   Dataset   │ ─▶ │  Train (generate + evaluate + learn interleaved)    │ ─▶ │   Compare   │
+│   Dataset   │ ─▶ │  Train (generate + reward + learn per step)         │ ─▶ │   Compare   │
 └─────────────┘    └──────────────────────────────────────────────────────┘    └─────────────┘
+                         │                                                          │
+                         ▼                                                          ▼
+                   N completions/prompt,                                       Same eval as
+                   reward = flip + sim                                         offline methods
 ```
 
 ## Currently Implemented Datasets
@@ -144,17 +150,35 @@ python train_dpo.py \
 ```bash
 python train_sft.py \
     --dataset_path ./results/dpo_pairs_boolq_2000e40c_1pair/dpo_training.jsonl \
-    --output_dir ./results/sft_model_boolq_1pair_b4_1ep \
-    --num_train_epochs 1 --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
+    --output_dir ./results/sft_model_boolq_1pair_b4_05ep \
+    --num_train_epochs 0.5 --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
     --use_4bit --bf16 --gradient_checkpointing \
-    --use_wandb --wandb_run_name "sft-1pair-b4-1ep-boolq"
+    --use_wandb --wandb_run_name "sft-1pair-b4-05ep-boolq"
 ```
 
-> **Note**: Prefer `--num_train_epochs` over `--max_steps`. Fixed step counts confound batch size with training duration (see RESULTS.md).
+> **Note**: Prefer `--num_train_epochs` over `--max_steps`. Fixed step counts confound batch size with training duration (see RESULTS.md). SFT overfits quickly — 0.5 epochs is the recommended duration (see OVERVIEW.md).
 
-Both methods use QLoRA (4-bit quantization) and produce LoRA adapters.
+**Option C: GRPO (Group Relative Policy Optimization — online RL)**
+```bash
+python train_grpo.py \
+    --dataset_name boolq \
+    --max_entries 2000 \
+    --output_dir ./results/grpo_model_boolq_2ep \
+    --num_train_epochs 2 --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
+    --num_generations 4 --max_completion_length 512 --temperature 1.2 \
+    --use_4bit --bf16 --gradient_checkpointing \
+    --use_wandb --wandb_run_name "grpo-boolq-2ep"
+```
 
-**Output:** `results/{dpo,sft}_model_{dataset}_{suffix}/` (LoRA adapter)
+> **Key difference**: GRPO generates counterfactuals **during training** and learns from a reward signal. No pre-generated training data needed — it loads raw entries directly from the dataset registry. The reward function uses the base model (LoRA adapters temporarily disabled) as the judge, matching the evaluation pipeline.
+>
+> Two reward modes are supported:
+> - **Single reward** (default): Combined score `flip_bonus + 0.8 * similarity`, mirroring the offline unified score
+> - **Multi-reward** (`--multi_reward`): Decomposed `FlipReward` + `SimilarityReward` (+ optional `MinimalityReward` with `--use_minimality_reward`), each tracked independently by TRL
+
+All methods use QLoRA (4-bit quantization) and produce LoRA adapters.
+
+**Output:** `results/{dpo,sft,grpo}_model_{dataset}_{suffix}/` (LoRA adapter)
 
 ### Stage 5: Evaluate Models
 
@@ -183,6 +207,7 @@ Compares base model vs fine-tuned model (DPO, SFT, or any LoRA adapter) on held-
 - BASE model is the judge for ALL counterfactuals (ensures fair comparison)
 - Use `--base_eval_dir` to reuse base model CFs when comparing different training configs
 - For SNLI, same entry indices are used for both premise/hypothesis variants
+- **Hardware caveat**: bf16 inference produces slightly different results on different GPU types (A100 vs RTXA6000), causing 2-5pp variance in LFR. For final comparisons, run all models in one SLURM job on the same node
 
 **Output:** `results/evaluation_{dataset}_{suffix}/` with `eval_report.md`, `eval_summary.json`
 
@@ -207,13 +232,6 @@ results/
 ├── dpo_pairs_boolq_100e40c/
 ├── dpo_model_boolq_100e40c/
 └── evaluation_boolq_100e40c/
-```
-
-Run scripts define these at the top:
-```bash
-ENTRIES=100
-CFS=40
-SUFFIX="${ENTRIES}e${CFS}c"
 ```
 
 ---
@@ -335,17 +353,21 @@ See `RESULTS.md` for full experimental results and `OVERVIEW.md` for a detailed 
 
 | Method | BoolQ | SNLI-Premise | SNLI-Hypothesis |
 |--------|:-----:|:------------:|:---------------:|
-| Base | 44.9% | 51.5% | 46.3% |
-| **DPO** (2-pair b4, 2ep) | **52.5%** (+9.3%) | **71.5%** (+17.4%) | — |
-| **DPO** (1-pair b4, 2ep) | 50.7% (+8.1%) | 65.7% (+12.2%) | **54.3%** (+7.5%) |
-| SFT (best, ~0.3-0.5ep) | 49.2% (+4.1%) | 54.5% (+2.7%) | 45.3% (-0.8%) |
+| Base | ~43-47% | ~52-54% | ~46-47% |
+| **DPO** (2-pair b4, 2ep) | **+9.3%** | **+17.3%** | — |
+| **DPO** (1-pair b4, 2ep) | +8.1% | +12.2% | **+7.5%** |
+| SFT (best, ~0.3-0.5ep) | +4.1% | +2.7% | -0.8% |
+
+> **Note**: Base LFR varies 2-5pp across eval runs due to bf16 inference differences across GPU hardware (A100 vs RTXA6000). Deltas are computed per-run against each run's own base. See OVERVIEW.md for details.
 
 **Key findings:**
-- **DPO outperforms SFT** on all datasets, winning every head-to-head comparison at equal training duration
+- **DPO outperforms SFT** on all datasets, winning 8 of 9 head-to-head comparisons at equal training duration
 - **2 epochs** is optimal for DPO; SFT overfits quickly and peaks at ~0.3-0.5 epochs
+- **SFT at 1 epoch is worse than at 0.3-0.5 epochs** — training loss keeps dropping (1.1 → 0.6 → 0.4) but downstream LFR deteriorates, confirming overfitting
 - **Smaller batch (b4)** with more gradient updates outperforms larger batch (b16) at equal epochs
 - **2-pair ≥ 1-pair** when trained long enough (the original "1-pair is better" finding was a training duration artifact — see RESULTS.md)
 - SFT can hurt performance (negative LFR on SNLI), while DPO consistently improves
+- No evaluation during training (only training loss is logged); overfitting is only detectable via post-hoc evaluation
 
 ---
 
@@ -388,9 +410,9 @@ cfg-dpo/
 ├── train_dpo.py                   # Stage 4: DPO training
 ├── train_sft.py                   # Stage 4: SFT training (chosen only)
 │
-│   # Training scripts (online methods - TODO)
-│   # train_grpo.py                # Stage 4: GRPO (generation during training)
-│   # train_gdpo.py                # Stage 4: GDPO (iterative gen→train cycles)
+│   # Training scripts (online methods)
+├── train_grpo.py                   # Stage 4: GRPO (generation during training)
+│   # train_gdpo.py                # Stage 4: GDPO (iterative gen→train cycles, planned)
 │
 ├── evaluate_models.py             # Stage 5: Model comparison
 │
@@ -415,7 +437,7 @@ cfg-dpo/
     ├── dpo_model_{dataset}_{suffix}/
     ├── dpo_model_{dataset}_{suffix}_1pair/
     ├── sft_model_{dataset}_{suffix}/
-    ├── sft_model_{dataset}_{suffix}_1pair/
+    ├── grpo_model_{dataset}_{suffix}/
     └── evaluation_{dataset}_{suffix}/
 ```
 
@@ -450,33 +472,9 @@ Results are saved after each stage, allowing pipeline resumption:
 | 2 | `counterfactuals_{suffix}/{dataset}_original_predictions.json` | Model's predictions on original inputs |
 | 2 | `counterfactuals_{suffix}/{dataset}_evaluated.jsonl` | CFs with evaluation scores |
 | 3 | `dpo_pairs_{dataset}_{suffix}/dpo_training.jsonl` | Training data (DPO uses both, SFT uses "chosen") |
-| 4 | `{dpo,sft}_model_{dataset}_{suffix}/` | LoRA adapter weights |
+| 4 | `{dpo,sft,grpo}_model_{dataset}_{suffix}/` | LoRA adapter weights |
 | 5 | `evaluation_{dataset}_{suffix}/eval_report.md` | Human-readable comparison |
 | 5 | `evaluation_{dataset}_{suffix}/eval_summary.json` | Structured metrics |
-
-## Parallel Execution (Large-Scale Runs)
-
-For large datasets (e.g., 2000+ entries), Stage 1 can be parallelized using SLURM array jobs:
-
-```bash
-# Step 1: Submit parallel Stage 1 jobs (20 shards × 100 entries each = 2000 total)
-sbatch run_parallel_stage1.sh
-
-# Step 2: After ALL Stage 1 jobs complete, merge and run Stages 2-5
-sbatch run_stages_2to5.sh
-```
-
-**Configuration** (edit at top of scripts):
-```bash
-TOTAL_ENTRIES=2000
-ENTRIES_PER_SHARD=400  # Creates 5 shards (#SBATCH --array=0-4)
-CFS=40
-DATASETS="boolq snli_premise snli_hypothesis"
-```
-
-**How it works:**
-1. `run_parallel_stage1.sh`: Each array task processes a shard (e.g., entries 0-99, 100-199, etc.)
-2. `run_stages_2to5.sh`: Merges shard files, then runs Stages 2-5 sequentially per dataset
 
 ## Environment Variables
 
@@ -502,41 +500,19 @@ wandb login
 ```
 
 **Logged metrics:**
-- Training loss curves (DPO loss, SFT loss)
-- Learning rate schedule
-- Gradient norms
-- Training/eval rewards (DPO)
+- Training loss curves (DPO loss, SFT loss, GRPO policy loss)
+- Learning rate schedule and gradient norms
+- GRPO reward signals (per-function when using `--multi_reward`)
 
 **Usage:**
-Training scripts automatically use W&B with `--use_wandb`. Run names follow the pattern: `{method}-{pairs}-{batch}-{dataset}` (e.g., `dpo-1pair-b16-boolq`).
-
-```bash
-# Already enabled in all run scripts
-python train_dpo.py ... --use_wandb --wandb_run_name "dpo-1pair-b4-boolq"
-python train_sft.py ... --use_wandb --wandb_run_name "sft-2pair-b16-snli_premise"
-```
+All training scripts support `--use_wandb` with a descriptive `--wandb_run_name`.
 
 ---
 
 ## Future Work
 
-### Benchmark Evaluation
-
-After completing the comparison of post-training methods (SFT, DPO, GRPO, GDPO), we plan to evaluate all trained models on standard benchmarks to check for capability degradation (catastrophic forgetting):
-
-**Planned benchmarks:**
-- **MMLU** - Multitask Language Understanding
-- **HellaSwag** - Commonsense reasoning
-- **ARC** - AI2 Reasoning Challenge
-- **TruthfulQA** - Truthfulness evaluation
-
-**Goal:** Ensure that fine-tuning for counterfactual generation does not significantly degrade the model's general capabilities.
-
-### Online Methods
-
-Implement and compare online learning methods:
-- **GRPO** - Group Relative Policy Optimization (generation during training)
-- **GDPO** - Generalized DPO (iterative generation + training cycles)
+- **GDPO** — Group reward-Decoupled normalization Policy Optimization ([Liu et al., 2026](https://arxiv.org/abs/2601.05242)). Extends multi-reward GRPO with per-reward normalization to avoid reward advantage collapse. TRL supports this via `multi_objective_aggregation="normalize_then_sum"`.
+- **Benchmark evaluation** — Evaluate trained models on standard benchmarks (MMLU, HellaSwag, ARC) to check for capability degradation.
 
 ## License
 
