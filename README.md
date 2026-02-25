@@ -2,7 +2,7 @@
 
 **Thesis Title:** *Self-Align to Explain: Comparing Post-Training Methods for Counterfactual Generation*
 
-**Abstract:** This thesis compares post-training self-alignment methods for counterfactual example generation. Using self-generated training data, we evaluate offline methods (SFT, DPO) and online RL methods (GRPO) on their ability to produce minimal edits that flip classifier predictions.
+**Abstract:** This thesis compares post-training self-alignment methods — SFT, DPO, GRPO, and GDPO — for counterfactual example generation. We evaluate each method's ability to produce minimal, fluent edits that flip classifier predictions, measuring label flip rate, edit distance, and perplexity.
 
 ---
 
@@ -10,36 +10,36 @@ A research pipeline for generating diverse counterfactuals from classification d
 
 ## Research Goal
 
-This project investigates how different training paradigms affect a language model's ability to generate **minimal, label-flipping counterfactuals** for text classification tasks. We compare:
+This project investigates how different post-training methods affect a language model's ability to generate **minimal, label-flipping counterfactuals** for text classification tasks. We compare:
 
-| Method | Type | Description |
-|--------|------|-------------|
-| **DPO** | Offline | Direct Preference Optimization on pre-generated preference pairs |
-| **SFT** | Offline | Supervised Fine-Tuning on successful counterfactuals only |
-| **GRPO** | Online | Group Relative Policy Optimization with generation during training |
-| **GDPO** | Online | Group reward-Decoupled normalization Policy Optimization (planned) |
-
-**Key distinction:** Offline methods train on pre-generated data (Stages 1-2), while online methods interleave generation and training.
+| Method | Description |
+|--------|-------------|
+| **SFT** | Supervised Fine-Tuning on successful counterfactuals only |
+| **DPO** | Direct Preference Optimization on pre-generated preference pairs |
+| **GRPO** | Group Relative Policy Optimization with reward-driven generation during training |
+| **GDPO** | Group reward-Decoupled normalization Policy Optimization (planned) |
 
 ---
 
 ## Overview
 
-The pipeline implements a multi-stage approach for **offline methods** (DPO, SFT):
+The pipeline supports two training paradigms:
+
+**DPO / SFT** use pre-generated training data from the pipeline below:
 
 1. **Generate** diverse counterfactuals using high-temperature sampling
 2. **Evaluate** counterfactuals on label flip rate, confidence, and semantic similarity
 3. **Construct** training data (preference pairs for DPO, successful CFs for SFT)
-4. **Train** the model with chosen method (DPO, SFT)
+4. **Train** the model with DPO or SFT
 5. **Compare** base model vs fine-tuned model (edit distance, LFR, perplexity)
 
-For **online methods** (GRPO), the pipeline is simpler: the dataset is loaded directly, and generation + reward computation + learning happen within each training step.
+**GRPO / GDPO** skip data pre-generation — the dataset is loaded directly and generation + reward computation + learning happen within each training step.
 
 ```
-OFFLINE METHODS (DPO, SFT):
+DPO / SFT Pipeline:
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
 │   Dataset   │ ─▶ │  Generate   │ ─▶ │  Evaluate   │ ─▶ │  Construct  │ ─▶ │    Train    │ ─▶ │   Compare   │
-│  (any type) │    │     CFs     │    │     CFs     │    │ Train Data  │    │ DPO/SFT/... │    │   Models    │
+│  (any type) │    │     CFs     │    │     CFs     │    │ Train Data  │    │  DPO / SFT  │    │   Models    │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
                          │                  │                  │                  │                  │
                          ▼                  ▼                  ▼                  ▼                  ▼
@@ -47,14 +47,14 @@ OFFLINE METHODS (DPO, SFT):
                    high temp          confidence,        chosen only (SFT)   model (LoRA)      LFR, PPL
                                       similarity
 
-ONLINE METHODS (GRPO):
+GRPO / GDPO Pipeline:
 ┌─────────────┐    ┌──────────────────────────────────────────────────────┐    ┌─────────────┐
 │   Dataset   │ ─▶ │  Train (generate + reward + learn per step)         │ ─▶ │   Compare   │
 └─────────────┘    └──────────────────────────────────────────────────────┘    └─────────────┘
                          │                                                          │
                          ▼                                                          ▼
                    N completions/prompt,                                       Same eval as
-                   reward = flip + sim                                         offline methods
+                   reward = flip + sim                                         DPO/SFT
 ```
 
 ## Currently Implemented Datasets
@@ -349,25 +349,25 @@ Note: Chosen/rejected responses are stored as plain text (edit tags removed) sin
 
 See `RESULTS.md` for full experimental results and `OVERVIEW.md` for a detailed analysis of all runs.
 
-### Best results per method (LFR improvement over base)
+### Best ΔLFR per method per dataset
 
 | Method | BoolQ | SNLI-Premise | SNLI-Hypothesis |
 |--------|:-----:|:------------:|:---------------:|
-| Base | ~43-47% | ~52-54% | ~46-47% |
-| **DPO** (2-pair b4, 2ep) | **+9.3%** | **+17.3%** | — |
-| **DPO** (1-pair b4, 2ep) | +8.1% | +12.2% | **+7.5%** |
-| SFT (best, ~0.3-0.5ep) | +4.1% | +2.7% | -0.8% |
+| **DPO** | **+9.4%** | **+17.3%** | **+7.5%** |
+| SFT | +4.1% | +2.7% | +1.8% |
+| GRPO (g4) | *pending* | +7.2% | -10.6% |
+| GRPO (g16) | *pending* | *pending* | *pending* |
+| GDPO | *planned* | *planned* | *planned* |
 
-> **Note**: Base LFR varies 2-5pp across eval runs due to bf16 inference differences across GPU hardware (A100 vs RTXA6000). Deltas are computed per-run against each run's own base. See OVERVIEW.md for details.
+> ΔLFR = improvement in label flip rate over the base model (per-run). Base LFR varies 2-5pp across eval runs due to bf16 inference differences across GPU types. See `OVERVIEW.md` for details.
 
 **Key findings:**
 - **DPO outperforms SFT** on all datasets, winning 8 of 9 head-to-head comparisons at equal training duration
 - **2 epochs** is optimal for DPO; SFT overfits quickly and peaks at ~0.3-0.5 epochs
-- **SFT at 1 epoch is worse than at 0.3-0.5 epochs** — training loss keeps dropping (1.1 → 0.6 → 0.4) but downstream LFR deteriorates, confirming overfitting
 - **Smaller batch (b4)** with more gradient updates outperforms larger batch (b16) at equal epochs
-- **2-pair ≥ 1-pair** when trained long enough (the original "1-pair is better" finding was a training duration artifact — see RESULTS.md)
-- SFT can hurt performance (negative LFR on SNLI), while DPO consistently improves
-- No evaluation during training (only training loss is logged); overfitting is only detectable via post-hoc evaluation
+- **2-pair ≥ 1-pair** when trained long enough (the original "1-pair is better" finding was a training duration artifact)
+- GRPO (g4) suffers from **reward advantage collapse** — with only 4 generations per prompt, all completions often receive identical rewards, producing zero learning signal. GRPO g16 reruns are in progress to address this
+- SFT can hurt performance (negative ΔLFR on SNLI-H), while DPO consistently improves
 
 ---
 
@@ -412,7 +412,7 @@ cfg-dpo/
 │
 │   # Training scripts (online methods)
 ├── train_grpo.py                   # Stage 4: GRPO (generation during training)
-│   # train_gdpo.py                # Stage 4: GDPO (iterative gen→train cycles, planned)
+│   # train_gdpo.py                # Stage 4: GDPO (decoupled reward normalization, planned)
 │
 ├── evaluate_models.py             # Stage 5: Model comparison
 │
@@ -511,7 +511,8 @@ All training scripts support `--use_wandb` with a descriptive `--wandb_run_name`
 
 ## Future Work
 
-- **GDPO** — Group reward-Decoupled normalization Policy Optimization ([Liu et al., 2026](https://arxiv.org/abs/2601.05242)). Extends multi-reward GRPO with per-reward normalization to avoid reward advantage collapse. TRL supports this via `multi_objective_aggregation="normalize_then_sum"`.
+- **GRPO g16 reruns** — All GRPO experiments are being rerun with `num_generations=16` to mitigate reward advantage collapse observed with `num_generations=4`.
+- **GDPO** — Group reward-Decoupled normalization Policy Optimization ([Liu et al., 2026](https://arxiv.org/abs/2601.05242)). Extends multi-reward GRPO with per-reward normalization to further address reward collapse across objectives.
 - **Benchmark evaluation** — Evaluate trained models on standard benchmarks (MMLU, HellaSwag, ARC) to check for capability degradation.
 
 ## License
