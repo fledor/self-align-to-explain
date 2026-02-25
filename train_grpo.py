@@ -92,6 +92,9 @@ def parse_args():
                         help="KL penalty coefficient (0.0 = no KL, per DeepSeek R1)")
     parser.add_argument("--epsilon", type=float, default=0.2,
                         help="GRPO clipping epsilon")
+    parser.add_argument("--generation_batch_size", type=int, default=None,
+                        help="Generation batch size (must be divisible by num_generations). "
+                             "Defaults to per_device_train_batch_size * gradient_accumulation_steps.")
 
     # Logging
     parser.add_argument("--logging_steps", type=int, default=1)
@@ -639,6 +642,8 @@ def main():
         log_completions=False,
         model_init_kwargs=model_init_kwargs,
     )
+    if args.generation_batch_size is not None:
+        grpo_config_kwargs["generation_batch_size"] = args.generation_batch_size
     if args.multi_reward and args.reward_weights:
         grpo_config_kwargs["reward_weights"] = args.reward_weights
 
