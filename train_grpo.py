@@ -34,7 +34,7 @@ from sentence_transformers import SentenceTransformer
 from config import Config
 from dataset_registry import get_dataset
 from prompts import get_generation_prompt, get_verification_prompt, format_chat_messages
-from utils import parse_edit_tag, normalize_label
+from utils import parse_edit_tag, normalize_label, parse_confidence
 
 
 def parse_args():
@@ -224,17 +224,19 @@ class CounterfactualReward:
 
         # Verify label flips for valid completions
         flip_results = {}
+        confidence_results = {}
         with torch.no_grad():
             for i in valid_indices:
                 verification_inputs = self._build_verification_inputs(
                     edited_texts[i], kwargs, i
                 )
-                predicted_label = self._predict_label(verification_inputs)
+                predicted_label, confidence = self._predict_label(verification_inputs)
                 flipped = (
                     predicted_label is not None
                     and normalize_label(predicted_label) != normalize_label(original_labels[i])
                 )
                 flip_results[i] = flipped
+                confidence_results[i] = confidence
 
         # Re-enable LoRA adapters
         self.model.enable_adapter_layers()
@@ -248,15 +250,16 @@ class CounterfactualReward:
                 original_texts[i], edited_texts[i]
             )
 
-        # Compute composite rewards
+        # Compute composite rewards: flip_bonus + confidence * similarity
         rewards = []
         for i in range(len(completions)):
             if edited_texts[i] is None:
                 rewards.append(0.0)
             else:
                 flip_bonus = 1.0 if flip_results.get(i, False) else 0.0
+                confidence = confidence_results.get(i, 0.5)
                 similarity = similarity_results.get(i, 0.0)
-                reward = flip_bonus + 0.8 * similarity
+                reward = flip_bonus + confidence * similarity
                 rewards.append(reward)
 
         # Log stats periodically
@@ -294,8 +297,8 @@ class CounterfactualReward:
         else:
             raise ValueError(f"Unknown dataset: {self.dataset_name}")
 
-    def _predict_label(self, verification_inputs: dict) -> Optional[str]:
-        """Predict label using the base model (LoRA disabled)."""
+    def _predict_label(self, verification_inputs: dict):
+        """Predict label using the base model (LoRA disabled). Returns (label, confidence)."""
         system_prompt, user_prompt = get_verification_prompt(
             dataset_name=self.dataset_name,
             **verification_inputs,
@@ -318,7 +321,11 @@ class CounterfactualReward:
             zip(model_inputs.input_ids, generated_ids)
         ]
         response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-        return self.dataset_obj.parse_label_from_response(response)
+        label = self.dataset_obj.parse_label_from_response(response)
+        confidence = parse_confidence(response)
+        if confidence is None:
+            confidence = 0.5
+        return label, confidence
 
     def _compute_similarity(self, original_text: str, edited_text: str) -> float:
         """Compute semantic similarity between original and edited text."""
@@ -371,7 +378,7 @@ class FlipReward:
                 verification_inputs = _build_verification_inputs(
                     self.dataset_name, edited_texts[i], kwargs, i
                 )
-                predicted_label = _predict_label(
+                predicted_label, _ = _predict_label(
                     self.model, self.tokenizer, self.dataset_name,
                     self.dataset_obj, verification_inputs
                 )
@@ -473,7 +480,8 @@ def _build_verification_inputs(dataset_name: str, edited_text: str, kwargs: dict
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
 
-def _predict_label(model, tokenizer, dataset_name, dataset_obj, verification_inputs) -> Optional[str]:
+def _predict_label(model, tokenizer, dataset_name, dataset_obj, verification_inputs):
+    """Returns (predicted_label, confidence) tuple."""
     system_prompt, user_prompt = get_verification_prompt(
         dataset_name=dataset_name, **verification_inputs,
     )
@@ -487,7 +495,11 @@ def _predict_label(model, tokenizer, dataset_name, dataset_obj, verification_inp
     )
     generated_ids = [out[len(inp):] for inp, out in zip(model_inputs.input_ids, generated_ids)]
     response = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
-    return dataset_obj.parse_label_from_response(response)
+    label = dataset_obj.parse_label_from_response(response)
+    confidence = parse_confidence(response)
+    if confidence is None:
+        confidence = 0.5
+    return label, confidence
 
 
 def _compute_similarity(similarity_model, original_text: str, edited_text: str) -> float:

@@ -10,14 +10,16 @@ Comparing post-training self-alignment methods for improving counterfactual gene
 
 Best ΔLFR per method per dataset, using fair-base evaluations (N=100 unless noted).
 
-| Dataset | DPO | SFT | GRPO g4 | GRPO g16 | GDPO |
-|---------|:---:|:---:|:-------:|:--------:|:----:|
+| Dataset | DPO | SFT | GRPO g4 † | GRPO g16 | GDPO |
+|---------|:---:|:---:|:---------:|:--------:|:----:|
 | **BoolQ** | **+9.4%** | +4.1% | *pending* | *pending* | *planned* |
 | | 2pair b16, 3ep | 2pair b4, 200step | | | |
 | **SNLI-P** | **+17.3%** | +2.7% | +7.2% | *pending* | *planned* |
 | | 2pair b4, 2ep | 1pair b4, 200step | multi g4, 2ep | | |
 | **SNLI-H** | **+7.5%** | +1.8% | -10.6% | *pending* | *planned* |
 | | 1pair b4, 2ep | 2pair b4, 2ep | single g4, 2ep | | |
+
+† GRPO g4 single-reward used old reward formula (`flip + 0.8 * sim`). Multi-reward and g16 v2 use the corrected formula (`flip + confidence * sim`).
 
 DPO leads on all datasets by a wide margin. GRPO g4 sits between SFT and DPO on SNLI-P but is harmful on SNLI-H (compromised by reward advantage collapse). SFT provides modest or negative gains.
 
@@ -111,9 +113,15 @@ On SNLI-P, GRPO g4 achieves +5.4% (single) and +7.2% (multi), placing it between
 
 On SNLI-H, GRPO g4 is harmful (-10.6% single, -11.3% multi), worse than both base and SFT. The models learned to make extremely minimal edits (NED ~0.16, half of base) that rarely flip labels. With 83% zero-std, training signal was too sparse to learn effectively.
 
+### Reward correction
+
+The initial GRPO single-reward runs (g4 and g16) used `flip + 0.8 * similarity` — an arbitrary weight with no confidence term. The DPO unified score uses `flip_bonus + confidence * similarity`. The corrected GRPO single reward now matches: `flip + confidence * similarity`, where confidence is the base model's classification confidence on the edited text.
+
+Multi-reward runs are unaffected (they use separate `FlipReward` + `SimilarityReward` classes). All g4 results and the first g16 single-reward results use the old formula (marked with † in RESULTS.md). New g16 v2 single-reward jobs use the corrected formula.
+
 ### Reruns with num_generations=16
 
-All 6 configurations (3 datasets, 2 modes) have been resubmitted with `num_generations=16` to increase group diversity. This is expected to reduce zero-std from ~50-83% to ~3-5%, providing substantially better training signal. Results pending.
+All 6 configurations (3 datasets, 2 modes) have been resubmitted with `num_generations=16` to increase group diversity. This is expected to reduce zero-std from ~50-83% to ~3-5%, providing substantially better training signal. An additional 3 single-reward v2 jobs use the corrected reward formula. Results pending.
 
 ---
 
@@ -137,13 +145,14 @@ TRL's `GRPOTrainer` supports this via `multi_objective_aggregation="normalize_th
 ## 7. Current Status
 
 ### Running jobs
-- GRPO g16 training: 6 jobs (3 datasets x 2 modes), ~7 hours in
-- GRPO g4 BoolQ evaluation: 2 jobs (single + multi), queued
+- GRPO g16 training: 6 jobs (3 datasets x 2 modes, old single reward), ~8 hours in
+- GRPO g16 v2 training: 3 jobs (3 datasets, corrected single reward), queued
+- GRPO g4 BoolQ evaluation: 2 jobs (single + multi), queued/running
 - SFT 0.5ep BoolQ evaluation: 3 remaining configs, running
 - DPO 2pair 2ep SNLI-H evaluation: 2 configs (b4 + b16), queued
 
 ### Pending after current jobs
-- Evaluate GRPO g16 models once training completes
+- Evaluate all GRPO g16 models (old + v2) once training completes
 - Evaluate GRPO g4 BoolQ once training completes
 
 ### Next experiments

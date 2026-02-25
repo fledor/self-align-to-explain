@@ -54,7 +54,7 @@ GRPO / GDPO Pipeline:
                          │                                                          │
                          ▼                                                          ▼
                    N completions/prompt,                                       Same eval as
-                   reward = flip + sim                                         DPO/SFT
+                   reward = flip + conf*sim                                    DPO/SFT
 ```
 
 ## Currently Implemented Datasets
@@ -173,7 +173,7 @@ python train_grpo.py \
 > **Key difference**: GRPO generates counterfactuals **during training** and learns from a reward signal. No pre-generated training data needed — it loads raw entries directly from the dataset registry. The reward function uses the base model (LoRA adapters temporarily disabled) as the judge, matching the evaluation pipeline.
 >
 > Two reward modes are supported:
-> - **Single reward** (default): Combined score `flip_bonus + 0.8 * similarity`, mirroring the offline unified score
+> - **Single reward** (default): Combined score `flip_bonus + confidence * similarity`, mirroring the DPO unified score
 > - **Multi-reward** (`--multi_reward`): Decomposed `FlipReward` + `SimilarityReward` (+ optional `MinimalityReward` with `--use_minimality_reward`), each tracked independently by TRL
 
 All methods use QLoRA (4-bit quantization) and produce LoRA adapters.

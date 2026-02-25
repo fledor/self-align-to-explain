@@ -15,6 +15,8 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 
 **Configs**: `{pairs} {batch}` where pairs = number of preference pairs per entry, batch = effective batch size (b4 = bs1×ga4, b16 = bs4×ga4). GRPO configs: `single` = combined reward, `multi` = decomposed rewards, `g4`/`g16` = generations per prompt.
 
+**GRPO reward versions**: GRPO g4 and g16 (non-v2) used an incorrect single reward: `flip + 0.8 * similarity` (no confidence). GRPO g16 v2 uses the corrected reward: `flip + confidence * similarity`, matching the DPO unified score. Multi-reward runs are unaffected (they use separate FlipReward + SimilarityReward). Results marked with † use the old reward.
+
 **Duration**: `200step` = fixed 200 gradient steps (variable effective epochs), `0.5ep`–`3ep` = epoch-controlled training.
 
 ---
@@ -73,7 +75,7 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 | DPO    | 1pair b16 | 3ep      | 63.0% | +9.3%  | 0.297 | 94.1  | yes  | 100 |
 | DPO    | 1pair b4  | 200step  | 60.2% | +7.9%  | 0.257 | 75.0  | no   | 50  |
 | GRPO   | multi g4  | 2ep      | 60.2% | +7.2%  | 0.275 | 85.1  | yes  | 100 |
-| GRPO   | single g4 | 2ep      | 58.7% | +5.4%  | 0.266 | 92.4  | yes  | 100 |
+| GRPO † | single g4 | 2ep      | 58.7% | +5.4%  | 0.266 | 92.4  | yes  | 100 |
 | DPO    | 2pair b4  | 200step  | 56.4% | +4.6%  | 0.244 | 69.8  | no   | 50  |
 | DPO    | 1pair b4  | 200step  | 57.6% | +4.5%  | 0.274 | 96.5  | yes  | 100 |
 | SFT    | 1pair b4  | 200step  | 54.5% | +2.7%  | 0.248 | 109.9 | yes  | 100 |
@@ -127,7 +129,7 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 | SFT    | 2pair b16 | 0.5ep    | 41.9% | -5.1%  | 0.326 | 385.0 | yes  | 100 |
 | SFT    | 1pair b4  | 0.5ep    | 41.7% | -5.3%  | 0.328 | 271.4 | yes  | 100 |
 | SFT    | 1pair b4  | 1ep      | 40.7% | -6.1%  | 0.343 | 211.0 | yes  | 100 |
-| GRPO   | single g4 | 2ep      | 36.3% | -10.6% | 0.167 | 227.9 | yes  | 100 |
+| GRPO † | single g4 | 2ep      | 36.3% | -10.6% | 0.167 | 227.9 | yes  | 100 |
 | GRPO   | multi g4  | 2ep      | 35.6% | -11.3% | 0.151 | 359.5 | yes  | 100 |
 
 
@@ -142,8 +144,9 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 | DPO 2pair b16 2ep   | SNLI-H  | eval submitted (fair base) |
 | GRPO single g4      | BoolQ   | training ~80% done         |
 | GRPO multi g4       | BoolQ   | training ~80% done         |
-| GRPO single g16     | all     | training in progress       |
+| GRPO † single g16   | all     | training in progress (old reward)  |
 | GRPO multi g16      | all     | training in progress       |
+| GRPO single g16 v2  | all     | training queued (corrected reward) |
 | SFT 1pair b16 0.5ep | BoolQ   | eval running               |
 | SFT 2pair b4 0.5ep  | BoolQ   | eval running               |
 | SFT 2pair b16 0.5ep | BoolQ   | eval running               |
@@ -170,5 +173,7 @@ All models use QLoRA (4-bit quantization), LoRA r=32, alpha=16, lr=5e-6 on Qwen/
 - **200step**: `max_steps=200` (effective epochs vary: 1pair b4 ~0.4-0.5ep, 1pair b16 ~1.6-1.9ep, 2pair b4 ~0.2-0.3ep, 2pair b16 ~0.8-1.0ep)
 - **DPO pairs**: chosen = label-flipping CFs, rejected = non-flipping CFs; 2pair = best+worst and 2nd-best+2nd-worst; 1pair = best+worst only
 - **SFT**: trains on chosen examples only (no rejected/contrast data)
-- **GRPO g4**: online RL, 4 generations per prompt, temperature=1.2, combined or decomposed reward
+- **GRPO g4/g16**: online RL, 4 or 16 generations per prompt, temperature=1.2, combined or decomposed reward
+- **GRPO † (old reward)**: single reward = `flip + 0.8 * similarity` (no confidence weighting)
+- **GRPO v2 (corrected reward)**: single reward = `flip + confidence * similarity` (matches DPO unified score)
 
