@@ -54,6 +54,13 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 | SFT    | 2pair b16 | 1ep      | 35.6% | -7.0%  | 0.158 | 11.4 | yes  | 100 |
 | DPO    | 1pair b4  | 200step  | 35.4% | -7.8%  | 0.130 | 11.7 | yes  | 100 |
 | SFT    | 1pair b4  | 0.5ep    | 33.6% | -9.1%  | 0.169 | 11.8 | yes  | 100 |
+| GRPO   | v2 g16    | ~0.11ep  | 34.9% | -8.3%  | 0.155 | 11.8 | yes  | 100 |
+| GRPO   | multi g16 | ~0.11ep  | 33.9% | -9.3%  | 0.163 | 11.5 | yes  | 100 |
+| GRPO † | single g4 | 2ep      | 33.0% | -10.4% | 0.126 | 11.0 | yes  | 100 |
+| GRPO   | multi g4  | 2ep      | 33.1% | -10.2% | 0.127 | 43.3 | yes  | 100 |
+| GRPO   | multi g16 | ~0.25ep  | 18.5% | -24.7% | 0.085 | 11.7 | yes  | 100 |
+| GRPO   | v2 g16    | ~0.50ep  |  8.4% | -35.4% | 0.241 | 10.6 | yes  | 100 |
+| GRPO   | v2 g16    | ~0.25ep  |  7.2% | -36.5% | 0.088 | 21.4 | yes  | 100 |
 
 
 ## SNLI-Premise
@@ -74,8 +81,17 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 | DPO    | 2pair b4  | 200step  | 61.2% | +9.7%  | 0.276 | 94.8  | no   | 100 |
 | DPO    | 1pair b16 | 3ep      | 63.0% | +9.3%  | 0.297 | 94.1  | yes  | 100 |
 | DPO    | 1pair b4  | 200step  | 60.2% | +7.9%  | 0.257 | 75.0  | no   | 50  |
+| GRPO   | v2 g16    | ~0.50ep  | 82.3% | +28.7% | 0.347 | 89.1  | yes  | 100 |
+| GRPO   | v2 g16    | ~0.25ep  | 80.7% | +27.2% | 0.359 | 70.7  | yes  | 100 |
+| GRPO   | v2 g16    | 1.0ep    | 77.6% | +24.4% | 0.341 | 94.7  | yes  | 100 |
+| GRPO   | v2 g16    | ~0.75ep  | 74.8% | +21.3% | 0.339 | 95.9  | yes  | 100 |
+| GRPO   | multi g16 | ~0.50ep  | 65.6% | +12.4% | 0.303 | 102.7 | yes  | 100 |
+| GRPO   | multi g16 | ~0.25ep  | 65.5% | +12.0% | 0.299 | 84.5  | yes  | 100 |
+| GRPO   | multi g16 | ~0.62ep  | 61.2% | +8.3%  | 0.276 | 151.1 | yes  | 100 |
 | GRPO   | multi g4  | 2ep      | 60.2% | +7.2%  | 0.275 | 85.1  | yes  | 100 |
+| GRPO   | multi g16 | ~0.88ep  | 59.3% | +6.1%  | 0.838 | 18738 | yes  | 100 |
 | GRPO † | single g4 | 2ep      | 58.7% | +5.4%  | 0.266 | 92.4  | yes  | 100 |
+| GRPO   | v2 g16    | ~0.06ep  | 52.9% | -1.0%  | 0.256 | 111.0 | yes  | 100 |
 | DPO    | 2pair b4  | 200step  | 56.4% | +4.6%  | 0.244 | 69.8  | no   | 50  |
 | DPO    | 1pair b4  | 200step  | 57.6% | +4.5%  | 0.274 | 96.5  | yes  | 100 |
 | SFT    | 1pair b4  | 200step  | 54.5% | +2.7%  | 0.248 | 109.9 | yes  | 100 |
@@ -129,8 +145,21 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 | SFT    | 2pair b16 | 0.5ep    | 41.9% | -5.1%  | 0.326 | 385.0 | yes  | 100 |
 | SFT    | 1pair b4  | 0.5ep    | 41.7% | -5.3%  | 0.328 | 271.4 | yes  | 100 |
 | SFT    | 1pair b4  | 1ep      | 40.7% | -6.1%  | 0.343 | 211.0 | yes  | 100 |
+| GRPO   | v2 g16    | 1.0ep    | 54.3% | +7.3%  | 0.285 | 374.4 | yes  | 100 |
+| GRPO   | v2 g16    | ~0.50ep  | 53.5% | +6.3%  | 0.276 | 370.6 | yes  | 100 |
+| GRPO   | v2 g16    | ~0.75ep  | 52.9% | +6.2%  | 0.276 | 450.8 | yes  | 100 |
+| GRPO   | v2 g16    | ~0.25ep  | 49.7% | +2.8%  | 0.290 | 319.4 | yes  | 100 |
+| GRPO   | v2 g16    | ~0.06ep  | 44.2% | -2.3%  | 0.327 | 224.3 | yes  | 100 |
+| GRPO † | single g4 | ckpt400 (~0.1ep) | 43.7% | -3.3% | 0.337 | — | yes | 100 |
+| GRPO † | single g4 | ckpt1000 (~0.25ep) | 39.9% | -7.5% | 0.265 | — | yes | 100 |
+| GRPO † | single g4 | ckpt2000 (~0.5ep) | 39.7% | -7.1% | 0.222 | — | yes | 100 |
+| GRPO   | multi g16 | ~0.50ep  | 38.5% | -8.8%  | 0.182 | 233.5 | yes  | 100 |
 | GRPO † | single g4 | 2ep      | 36.3% | -10.6% | 0.167 | 227.9 | yes  | 100 |
 | GRPO   | multi g4  | 2ep      | 35.6% | -11.3% | 0.151 | 359.5 | yes  | 100 |
+| GRPO   | multi g16 | ~0.25ep  | 35.7% | -11.5% | 0.174 | 314.4 | yes  | 100 |
+| GRPO   | multi g16 | ~0.75ep  | 35.4% | -11.8% | 0.095 | 251.8 | yes  | 100 |
+| GRPO   | multi g16 | 1.0ep    | 30.9% | -16.5% | 0.091 | 300.2 | yes  | 100 |
+| GRPO   | multi g16 | ~0.62ep  | 28.6% | -18.2% | 0.089 | 363.8 | yes  | 100 |
 
 
 ---
@@ -140,16 +169,9 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 
 | Model               | Dataset | Status                     |
 | ------------------- | ------- | -------------------------- |
-| DPO 2pair b4 2ep    | SNLI-H  | eval submitted (fair base) |
-| DPO 2pair b16 2ep   | SNLI-H  | eval submitted (fair base) |
-| GRPO single g4      | BoolQ   | training ~80% done         |
-| GRPO multi g4       | BoolQ   | training ~80% done         |
-| GRPO † single g16   | all     | training in progress (old reward)  |
-| GRPO multi g16      | all     | training in progress       |
-| GRPO single g16 v2  | all     | training queued (corrected reward) |
-| SFT 1pair b16 0.5ep | BoolQ   | eval running               |
-| SFT 2pair b4 0.5ep  | BoolQ   | eval running               |
-| SFT 2pair b16 0.5ep | BoolQ   | eval running               |
+| GRPO v2 g16 ckpt-6000 | BoolQ | resubmitted (timed out, all CFs generated, needs summary) |
+| GRPO multi g16 ckpt-4000 | BoolQ | resubmitted (timed out at 94/100 entries) |
+| GRPO multi g16 ckpt-6800 | BoolQ | resubmitted (timed out at 79/100 entries) |
 
 
 ---
@@ -173,7 +195,7 @@ All models use QLoRA (4-bit quantization), LoRA r=32, alpha=16, lr=5e-6 on Qwen/
 - **200step**: `max_steps=200` (effective epochs vary: 1pair b4 ~0.4-0.5ep, 1pair b16 ~1.6-1.9ep, 2pair b4 ~0.2-0.3ep, 2pair b16 ~0.8-1.0ep)
 - **DPO pairs**: chosen = label-flipping CFs, rejected = non-flipping CFs; 2pair = best+worst and 2nd-best+2nd-worst; 1pair = best+worst only
 - **SFT**: trains on chosen examples only (no rejected/contrast data)
-- **GRPO g4/g16**: online RL, 4 or 16 generations per prompt, temperature=1.2, combined or decomposed reward
+- **GRPO g4/g16**: online RL, 4 or 16 generations per prompt, temperature=1.2, combined or decomposed reward. g4 trained for 2ep; g16 trains for 1ep (see [GRPO_ANALYSIS.md](GRPO_ANALYSIS.md) for epoch analysis)
 - **GRPO † (old reward)**: single reward = `flip + 0.8 * similarity` (no confidence weighting)
 - **GRPO v2 (corrected reward)**: single reward = `flip + confidence * similarity` (matches DPO unified score)
 

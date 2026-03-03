@@ -2,7 +2,7 @@
 
 Comparing post-training self-alignment methods for improving counterfactual generation quality. All methods fine-tune Qwen/Qwen2.5-7B-Instruct using QLoRA (4-bit, LoRA r=32, alpha=16, lr=5e-6) on three NLI/classification datasets.
 
-**Last updated**: February 25, 2026
+**Last updated**: March 5, 2026
 
 ---
 
@@ -12,18 +12,20 @@ Best ΔLFR per method per dataset, using fair-base evaluations (N=100 unless not
 
 | Dataset | DPO | SFT | GRPO g4 † | GRPO g16 | GDPO |
 |---------|:---:|:---:|:---------:|:--------:|:----:|
-| **BoolQ** | **+9.4%** | +4.1% | *pending* | *pending* | *planned* |
-| | 2pair b16, 3ep | 2pair b4, 200step | | | |
-| **SNLI-P** | **+17.3%** | +2.7% | +7.2% | *pending* | *planned* |
-| | 2pair b4, 2ep | 1pair b4, 200step | multi g4, 2ep | | |
-| **SNLI-H** | **+7.5%** | +1.8% | -10.6% | *pending* | *planned* |
-| | 1pair b4, 2ep | 2pair b4, 2ep | single g4, 2ep | | |
+| **BoolQ** | **+9.4%** | +4.1% | −10.2% | −8.3% | *planned* |
+| | 2pair b16, 3ep | 2pair b4, 200step | multi g4, 2ep | v2 g16, ~0.11ep | |
+| **SNLI-P** | +17.3% | +2.7% | +7.2% | **+28.7%** | *planned* |
+| | 2pair b4, 2ep | 1pair b4, 200step | multi g4, 2ep | v2 g16, ~0.50ep | |
+| **SNLI-H** | +7.5% | +1.8% | -10.6% | **+7.3%** | *planned* |
+| | 1pair b4, 2ep | 2pair b4, 2ep | single g4, 2ep | v2 g16, 1.0ep | |
 
-† GRPO g4 single-reward used old reward formula (`flip + 0.8 * sim`). Multi-reward and g16 v2 use the corrected formula (`flip + confidence * sim`).
+† GRPO g4 single-reward used old reward formula (`flip + 0.8 * sim`). GRPO g16 v2 uses the corrected formula (`flip + confidence * sim`), matching the DPO unified score. Multi-reward runs use separate FlipReward + SimilarityReward.
 
-DPO leads on all datasets by a wide margin. GRPO g4 sits between SFT and DPO on SNLI-P but is harmful on SNLI-H (compromised by reward advantage collapse). SFT provides modest or negative gains.
+**GRPO v2 g16 beats DPO on SNLI-P** (+28.7% vs +17.3%) and **matches DPO on SNLI-H** (+7.3% vs +7.5%), both with the corrected single reward and optimal early stopping. BoolQ remains the only dataset where DPO clearly leads. Multi-reward GRPO is consistently worse than v2 single-reward across all datasets. SFT provides modest or negative gains.
 
-Higher-N evaluations (N=200, fair base) confirm the pattern: DPO 2pair b4 2ep reaches +21.0% on SNLI-H and +22.0% on SNLI-P, suggesting the N=100 numbers underestimate the true effect.
+The checkpoint sweep reveals that v2 performance is highly sensitive to training duration: SNLI-P peaks at 0.5ep then declines, while SNLI-H steadily improves through 1.0ep. BoolQ degrades rapidly from the start.
+
+Higher-N evaluations (N=200, fair base) show DPO 2pair b4 2ep reaches +21.0% on SNLI-H and +22.0% on SNLI-P; similar large-N evals for GRPO v2 are planned.
 
 ---
 
@@ -105,9 +107,9 @@ With 4 generations per prompt, the GRPO group often produced identical rewards a
 | SNLI-H | Single | 82.8% | 17.2% |
 | SNLI-H | Multi | 83.5% | 16.5% |
 
-BoolQ had adequate signal (~90% effective steps), and is expected to show meaningful GRPO results (eval pending). SNLI-H was severely compromised, with only ~17% of steps providing gradient signal.
+BoolQ had adequate signal (~90% effective steps). Eval completed: GRPO g4 BoolQ is harmful (−10.2% to −10.4% ΔLFR), worse than base. SNLI-H was severely compromised, with only ~17% of steps providing gradient signal.
 
-### Results
+### Results (g4)
 
 On SNLI-P, GRPO g4 achieves +5.4% (single) and +7.2% (multi), placing it between SFT and DPO. Notably, GRPO produces smaller edits (NED 0.27 vs DPO's 0.33) and better fluency (PPL 85-92 vs DPO's 84-142).
 
@@ -119,9 +121,41 @@ The initial GRPO single-reward runs (g4 and g16) used `flip + 0.8 * similarity` 
 
 Multi-reward runs are unaffected (they use separate `FlipReward` + `SimilarityReward` classes). All g4 results and the first g16 single-reward results use the old formula (marked with † in RESULTS.md). New g16 v2 single-reward jobs use the corrected formula.
 
-### Reruns with num_generations=16
+### Epoch analysis
 
-All 6 configurations (3 datasets, 2 modes) have been resubmitted with `num_generations=16` to increase group diversity. This is expected to reduce zero-std from ~50-83% to ~3-5%, providing substantially better training signal. An additional 3 single-reward v2 jobs use the corrected reward formula. Results pending.
+Analysis of g4 training curves (see [GRPO_ANALYSIS.md](GRPO_ANALYSIS.md)) revealed that useful learning concentrates in the first 0.25-0.5 epochs. By epoch 1.0, all SNLI models show complete entropy collapse (entropy ~0.003, zero gradients). Training for 2 epochs wastes 50-75% of compute. All g16 runs now train for 1 epoch only.
+
+### Reruns with num_generations=16 and checkpoint sweep
+
+All 6 configurations (3 datasets, 2 modes) were resubmitted with `num_generations=16` (1 epoch) to increase group diversity. An additional 3 single-reward v2 jobs use the corrected reward formula.
+
+A comprehensive checkpoint sweep evaluated both multi and v2 g16 at ~0.25ep intervals. The results reveal that **v2 single-reward dramatically outperforms multi-reward** and that **optimal training duration varies by dataset**:
+
+**SNLI-P checkpoint sweep (v2 g16):**
+
+| Checkpoint | ~Epoch | ΔLFR | NED | PPL |
+|------------|--------|------|-----|-----|
+| ckpt-4000 | 0.25ep | +27.2% | 0.359 | 70.7 |
+| ckpt-8000 | **0.50ep** | **+28.7%** | 0.347 | 89.1 |
+| ckpt-12000 | 0.75ep | +21.3% | 0.339 | 95.9 |
+| ckpt-16000 | 1.0ep | +24.4% | 0.341 | 94.7 |
+
+Peak at 0.5ep, then decline at 0.75ep with partial recovery at 1.0ep. The +28.7% result surpasses DPO's best (+17.3%) by 11.4 percentage points.
+
+**SNLI-H checkpoint sweep (v2 g16):**
+
+| Checkpoint | ~Epoch | ΔLFR | NED | PPL |
+|------------|--------|------|-----|-----|
+| ckpt-4000 | 0.25ep | +2.8% | 0.290 | 319.4 |
+| ckpt-8000 | 0.50ep | +6.3% | 0.276 | 370.6 |
+| ckpt-12000 | 0.75ep | +6.2% | 0.276 | 450.8 |
+| ckpt-16000 | **1.0ep** | **+7.3%** | 0.285 | 374.4 |
+
+Steadily improves through 1.0ep, nearly matching DPO's best (+7.5%). Unlike multi-reward which degrades severely on SNLI-H (-8.8% to -18.2%), v2 maintains stable improvement.
+
+**Multi-reward comparison:** Multi g16 peaks at +12.4% on SNLI-P (0.5ep) but collapses after 0.62ep (NED=0.838, PPL=18738 at 0.88ep). On SNLI-H, multi is consistently harmful at all checkpoints (-8.8% to -18.2%). The confidence-weighted single reward clearly outperforms decomposed rewards.
+
+**BoolQ:** Both multi and v2 remain harmful at all checkpoints. v2 degrades catastrophically with training (from -8.3% at 0.11ep to -36.5% at 0.25ep). This suggests a fundamental mismatch between the reward signal and the BoolQ task structure.
 
 ---
 
@@ -144,18 +178,24 @@ TRL's `GRPOTrainer` supports this via `multi_objective_aggregation="normalize_th
 
 ## 7. Current Status
 
-### Running jobs
-- GRPO g16 training: 6 jobs (3 datasets x 2 modes, old single reward), ~8 hours in
-- GRPO g16 v2 training: 3 jobs (3 datasets, corrected single reward), queued
-- GRPO g4 BoolQ evaluation: 2 jobs (single + multi), queued/running
-- SFT 0.5ep BoolQ evaluation: 3 remaining configs, running
-- DPO 2pair 2ep SNLI-H evaluation: 2 configs (b4 + b16), queued
+### Completed
+- GRPO g16 checkpoint sweep: 19/22 jobs completed, 3 BoolQ jobs resubmitted (timed out)
+- GRPO v2 g16 training: SNLI-P and SNLI-H completed (1.0ep); BoolQ timed out at 0.75ep
 
-### Pending after current jobs
-- Evaluate all GRPO g16 models (old + v2) once training completes
-- Evaluate GRPO g4 BoolQ once training completes
+### Pending
+- 3 BoolQ eval jobs resubmitted (jobs 2600632-34)
+
+### Key findings from sweep
+- **GRPO v2 g16 beats DPO on SNLI-P** (+28.7% at 0.5ep vs DPO +17.3%)
+- **GRPO v2 g16 matches DPO on SNLI-H** (+7.3% at 1.0ep vs DPO +7.5%)
+- **BoolQ remains harmful** for all GRPO configurations
+- **v2 single-reward >> multi-reward** across all datasets
+- **Early stopping is critical**: SNLI-P peaks at 0.5ep; SNLI-H improves through 1.0ep
 
 ### Next experiments
-- GDPO implementation and training
-- Higher-N evaluations (200+ samples) for top configs across methods
+- GDPO implementation and training (per-reward normalization)
+- Higher-N evaluations (200+ samples) for GRPO v2 best configs
+- Investigate BoolQ GRPO failure (reward hacking analysis)
 - Benchmark evaluation (MMLU, HellaSwag, ARC) for capability degradation checks
+
+For detailed GRPO training analysis (entropy collapse, reward collapse, epoch optimization), see [GRPO_ANALYSIS.md](GRPO_ANALYSIS.md).
