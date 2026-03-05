@@ -339,19 +339,49 @@ class CounterfactualReward:
 
 
 # ---------------------------------------------------------------------------
+# Prediction Cache (shared state between FlipReward and GatedConfidenceReward)
+# ---------------------------------------------------------------------------
+
+class PredictionCache:
+    """Stores (flipped, confidence) per completion index within a single reward call batch.
+
+    Populated by FlipReward (which runs first), consumed by GatedConfidenceReward.
+    Cleared at the start of each FlipReward.__call__ to avoid stale data.
+    """
+
+    def __init__(self):
+        self._cache: dict[int, tuple[bool, float]] = {}
+
+    def store(self, idx: int, flipped: bool, confidence: float):
+        self._cache[idx] = (flipped, confidence)
+
+    def get(self, idx: int) -> tuple[bool, float]:
+        return self._cache.get(idx, (False, 0.5))
+
+    def clear(self):
+        self._cache.clear()
+
+
+# ---------------------------------------------------------------------------
 # Decomposed Reward Functions (for --multi_reward mode)
 # ---------------------------------------------------------------------------
 
 class FlipReward:
-    """Binary reward: 1.0 if the base model's prediction flips, 0.0 otherwise."""
+    """Binary reward: 1.0 if the base model's prediction flips, 0.0 otherwise.
+
+    When a PredictionCache is provided, stores (flipped, confidence) for each
+    completion so that downstream rewards (GatedConfidenceReward) can reuse
+    the prediction without a redundant model call.
+    """
 
     __name__ = "flip_reward"
 
-    def __init__(self, tokenizer, dataset_name: str):
+    def __init__(self, tokenizer, dataset_name: str, prediction_cache: PredictionCache | None = None):
         self.model = None
         self.tokenizer = tokenizer
         self.dataset_name = dataset_name
         self.dataset_obj = get_dataset(dataset_name)
+        self.prediction_cache = prediction_cache
         self._call_count = 0
 
     def set_model(self, model):
@@ -360,6 +390,9 @@ class FlipReward:
     def __call__(self, completions, **kwargs):
         original_labels = kwargs.get("original_label", [])
         self._call_count += 1
+
+        if self.prediction_cache is not None:
+            self.prediction_cache.clear()
 
         edited_texts = []
         for completion in completions:
@@ -378,14 +411,17 @@ class FlipReward:
                 verification_inputs = _build_verification_inputs(
                     self.dataset_name, edited_texts[i], kwargs, i
                 )
-                predicted_label, _ = _predict_label(
+                predicted_label, confidence = _predict_label(
                     self.model, self.tokenizer, self.dataset_name,
                     self.dataset_obj, verification_inputs
                 )
-                flip_results[i] = (
+                flipped = (
                     predicted_label is not None
                     and normalize_label(predicted_label) != normalize_label(original_labels[i])
                 )
+                flip_results[i] = flipped
+                if self.prediction_cache is not None:
+                    self.prediction_cache.store(i, flipped, confidence)
 
         self.model.enable_adapter_layers()
         if was_training:
@@ -429,6 +465,62 @@ class SimilarityReward:
                 rewards.append(_compute_similarity(
                     self.similarity_model, original_texts[i], edited_texts[i]
                 ))
+
+        return rewards
+
+
+class GatedConfidenceReward:
+    """Confidence reward gated on label flip: returns confidence if flipped, 0.0 otherwise.
+
+    Reads from a shared PredictionCache populated by FlipReward, avoiding
+    redundant base-model inference.
+    """
+
+    __name__ = "gated_confidence_reward"
+
+    def __init__(self, prediction_cache: PredictionCache):
+        self.prediction_cache = prediction_cache
+        self._call_count = 0
+
+    def set_model(self, model):
+        pass
+
+    def __call__(self, completions, **kwargs):
+        self._call_count += 1
+        rewards = []
+        for i in range(len(completions)):
+            flipped, confidence = self.prediction_cache.get(i)
+            rewards.append(confidence if flipped else 0.0)
+
+        if self._call_count % 10 == 1:
+            n_gated = sum(1 for r in rewards if r > 0)
+            avg_conf = sum(rewards) / max(n_gated, 1) if n_gated else 0.0
+            print(f"  [GatedConfidence #{self._call_count}] gated={n_gated}/{len(rewards)}, avg_conf={avg_conf:.3f}")
+
+        return rewards
+
+
+class FormatReward:
+    """Binary reward for valid edit tag formatting: 1.0 if <edit>...</edit> present, 0.0 otherwise."""
+
+    __name__ = "format_reward"
+
+    def __init__(self):
+        self._call_count = 0
+
+    def set_model(self, model):
+        pass
+
+    def __call__(self, completions, **kwargs):
+        self._call_count += 1
+        rewards = []
+        for completion in completions:
+            content = completion[0]["content"] if isinstance(completion, list) else completion
+            rewards.append(1.0 if parse_edit_tag(content) is not None else 0.0)
+
+        if self._call_count % 10 == 1:
+            n_valid = sum(1 for r in rewards if r > 0)
+            print(f"  [FormatReward #{self._call_count}] valid={n_valid}/{len(rewards)}")
 
         return rewards
 
@@ -555,11 +647,14 @@ def main():
 
     # Create reward function(s) (model reference set after trainer creation)
     if args.multi_reward:
-        print("\nMulti-reward mode: using decomposed reward functions")
-        flip_fn = FlipReward(tokenizer, args.dataset_name)
+        print("\nMulti-reward mode (v2): flip + similarity + gated_confidence + format")
+        cache = PredictionCache()
+        flip_fn = FlipReward(tokenizer, args.dataset_name, prediction_cache=cache)
         sim_fn = SimilarityReward(similarity_model)
-        reward_fns_list = [flip_fn, sim_fn]
-        reward_fn_names = ["flip", "similarity"]
+        conf_fn = GatedConfidenceReward(cache)
+        fmt_fn = FormatReward()
+        reward_fns_list = [flip_fn, sim_fn, conf_fn, fmt_fn]
+        reward_fn_names = ["flip", "similarity", "gated_confidence", "format"]
         if args.use_minimality_reward:
             min_fn = MinimalityReward()
             reward_fns_list.append(min_fn)
