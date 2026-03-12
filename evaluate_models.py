@@ -1,12 +1,12 @@
 """
 Model Evaluation Script.
 
-Compares base model vs DPO-tuned model on counterfactual generation quality.
+Compares base model vs fine-tuned model on counterfactual generation quality.
 
 Key design choices:
 - LFR is computed by comparing CF labels to the BASE model's original prediction
   (not ground truth) - this measures "did the edit change the model's mind?"
-- BASE model is the judge for ALL CFs (both base-generated and DPO-generated)
+- BASE model is the judge for ALL CFs (both base-generated and fine-tuned)
   to ensure fair comparison
 - Supports deduplication, progressive saves, and resume capability
 
@@ -37,7 +37,7 @@ from utils import parse_edit_tag, save_json, save_jsonl, load_jsonl, normalize_l
 def get_parser() -> argparse.ArgumentParser:
     """Get argument parser."""
     parser = argparse.ArgumentParser(
-        description="Evaluate base vs DPO-tuned model on counterfactual generation"
+        description="Evaluate base vs fine-tuned model on counterfactual generation"
     )
     
     parser.add_argument(
@@ -47,10 +47,10 @@ def get_parser() -> argparse.ArgumentParser:
         help=f"Base model name (default: {Config.MODEL_NAME})",
     )
     parser.add_argument(
-        "--dpo_model_path",
+        "--model_path", "--dpo_model_path",
         type=str,
-        default="./results/dpo_model_test",
-        help="Path to DPO-tuned LoRA adapter",
+        default="./results/model_test",
+        help="Path to fine-tuned LoRA adapter",
     )
     parser.add_argument(
         "--datasets",
@@ -68,8 +68,8 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--num_samples",
         type=int,
-        default=20,
-        help="Number of samples per dataset (default: 20)",
+        default=200,
+        help="Number of samples per dataset (default: 200)",
     )
     parser.add_argument(
         "--cfs_per_entry",
@@ -127,17 +127,17 @@ def load_base_model(model_name: str, cache_dir: str):
     return model, tokenizer
 
 
-def load_dpo_model(base_model, dpo_path: str):
-    """Load DPO-tuned model by applying LoRA adapter."""
-    print(f"Loading DPO adapter from: {dpo_path}")
+def load_finetuned_model(base_model, model_path: str):
+    """Load fine-tuned model by applying LoRA adapter."""
+    print(f"Loading LoRA adapter from: {model_path}")
     
-    dpo_model = PeftModel.from_pretrained(
+    tuned_model = PeftModel.from_pretrained(
         base_model,
-        dpo_path,
+        model_path,
         is_trainable=False,
     )
     
-    return dpo_model
+    return tuned_model
 
 
 def sample_entries_with_shared_indices(
@@ -472,12 +472,12 @@ def verify_counterfactuals_with_base_model(
     cf_results: dict[str, list[dict]],
     original_predictions: dict,
     output_dir: Path,
-    model_source: str,  # "base" or "dpo"
+    model_source: str,  # "base" or "tuned"
 ) -> dict[str, list[dict]]:
     """
     Verify all counterfactuals using the BASE model.
     
-    This ensures fair comparison - same judge for both base and DPO CFs.
+    This ensures fair comparison - same judge for both base and fine-tuned CFs.
     LFR is computed by comparing CF prediction to original prediction.
     
     Args:
@@ -486,7 +486,7 @@ def verify_counterfactuals_with_base_model(
         cf_results: Dictionary of CF results per dataset
         original_predictions: Pre-computed original predictions
         output_dir: Output directory
-        model_source: "base" or "dpo" (for labeling in output)
+        model_source: "base" or "tuned" (for labeling in output)
         
     Returns:
         Updated cf_results with verification results
@@ -598,23 +598,27 @@ def compute_metrics(cf_results: dict[str, list[dict]]) -> dict:
                     total_ppl += cf["perplexity"]
                     ppl_count += 1
         
+        lfr = flipped_cfs / total_cfs if total_cfs > 0 else 0
+        ned = total_norm_edit_dist / total_cfs if total_cfs > 0 else 0
+
         metrics[dataset_name] = {
             "total_cfs": total_cfs,
-            "label_flip_rate": flipped_cfs / total_cfs if total_cfs > 0 else 0,
+            "label_flip_rate": lfr,
             "avg_edit_distance": total_edit_dist / total_cfs if total_cfs > 0 else 0,
-            "avg_norm_edit_distance": total_norm_edit_dist / total_cfs if total_cfs > 0 else 0,
+            "avg_norm_edit_distance": ned,
             "avg_perplexity": total_ppl / ppl_count if ppl_count > 0 else 0,
+            "lfr_per_ned": lfr / ned if ned > 0 else 0,
         }
     
     return metrics
 
 
-def generate_report(base_metrics: dict, dpo_metrics: dict, base_eval_dir: str = None) -> str:
+def generate_report(base_metrics: dict, tuned_metrics: dict, base_eval_dir: str = None) -> str:
     """Generate a markdown comparison report."""
     report_lines = [
         "# Model Evaluation Report",
         "",
-        "Comparison of Base Model vs DPO-Tuned Model on Counterfactual Generation",
+        "Comparison of Base Model vs Fine-Tuned Model on Counterfactual Generation",
         "",
         "**Note**: LFR measures whether the edit changed the BASE model's prediction",
         "(not whether it matched ground truth). BASE model is the judge for all CFs.",
@@ -630,25 +634,25 @@ def generate_report(base_metrics: dict, dpo_metrics: dict, base_eval_dir: str = 
         "",
         "## Summary",
         "",
-        "| Dataset | Model | LFR | Avg Edit Dist | Avg Norm Edit Dist | Avg PPL |",
-        "|---------|-------|-----|---------------|-------------------|---------|",
+        "| Dataset | Model | LFR | Avg Edit Dist | Avg Norm Edit Dist | Avg PPL | LFR/NED |",
+        "|---------|-------|-----|---------------|-------------------|---------|---------|",
     ])
     
-    all_datasets = set(base_metrics.keys()) | set(dpo_metrics.keys())
+    all_datasets = set(base_metrics.keys()) | set(tuned_metrics.keys())
     
     for dataset_name in sorted(all_datasets):
         if dataset_name in base_metrics:
             s = base_metrics[dataset_name]
             report_lines.append(
                 f"| {dataset_name} | Base | {s['label_flip_rate']:.1%} | "
-                f"{s['avg_edit_distance']:.1f} | {s['avg_norm_edit_distance']:.3f} | {s['avg_perplexity']:.1f} |"
+                f"{s['avg_edit_distance']:.1f} | {s['avg_norm_edit_distance']:.3f} | {s['avg_perplexity']:.1f} | {s['lfr_per_ned']:.2f} |"
             )
         
-        if dataset_name in dpo_metrics:
-            s = dpo_metrics[dataset_name]
+        if dataset_name in tuned_metrics:
+            s = tuned_metrics[dataset_name]
             report_lines.append(
-                f"| {dataset_name} | DPO | {s['label_flip_rate']:.1%} | "
-                f"{s['avg_edit_distance']:.1f} | {s['avg_norm_edit_distance']:.3f} | {s['avg_perplexity']:.1f} |"
+                f"| {dataset_name} | Tuned | {s['label_flip_rate']:.1%} | "
+                f"{s['avg_edit_distance']:.1f} | {s['avg_norm_edit_distance']:.3f} | {s['avg_perplexity']:.1f} | {s['lfr_per_ned']:.2f} |"
             )
     
     report_lines.extend([
@@ -659,25 +663,30 @@ def generate_report(base_metrics: dict, dpo_metrics: dict, base_eval_dir: str = 
         "- **Avg Edit Dist**: Average Levenshtein (character) edit distance",
         "- **Avg Norm Edit Dist**: Edit distance normalized by max text length",
         "- **Avg PPL**: Average perplexity of generated edits (lower = more fluent)",
+        "- **LFR/NED**: Label flip rate divided by normalized edit distance (higher = more efficient edits)",
         "",
         "## Improvement Summary",
         "",
     ])
     
-    # Compute overall improvements
     for dataset_name in sorted(all_datasets):
-        if dataset_name in base_metrics and dataset_name in dpo_metrics:
+        if dataset_name in base_metrics and dataset_name in tuned_metrics:
             base_lfr = base_metrics[dataset_name]["label_flip_rate"]
-            dpo_lfr = dpo_metrics[dataset_name]["label_flip_rate"]
-            lfr_diff = dpo_lfr - base_lfr
+            tuned_lfr = tuned_metrics[dataset_name]["label_flip_rate"]
+            lfr_diff = tuned_lfr - base_lfr
             
             base_edit = base_metrics[dataset_name]["avg_norm_edit_distance"]
-            dpo_edit = dpo_metrics[dataset_name]["avg_norm_edit_distance"]
-            edit_diff = dpo_edit - base_edit
+            tuned_edit = tuned_metrics[dataset_name]["avg_norm_edit_distance"]
+            edit_diff = tuned_edit - base_edit
             
+            base_lpn = base_metrics[dataset_name]["lfr_per_ned"]
+            tuned_lpn = tuned_metrics[dataset_name]["lfr_per_ned"]
+            lpn_diff = tuned_lpn - base_lpn
+
             report_lines.append(f"### {dataset_name}")
-            report_lines.append(f"- LFR: {base_lfr:.1%} → {dpo_lfr:.1%} ({lfr_diff:+.1%})")
-            report_lines.append(f"- Norm Edit Dist: {base_edit:.3f} → {dpo_edit:.3f} ({edit_diff:+.3f})")
+            report_lines.append(f"- LFR: {base_lfr:.1%} → {tuned_lfr:.1%} ({lfr_diff:+.1%})")
+            report_lines.append(f"- Norm Edit Dist: {base_edit:.3f} → {tuned_edit:.3f} ({edit_diff:+.3f})")
+            report_lines.append(f"- LFR/NED: {base_lpn:.2f} → {tuned_lpn:.2f} ({lpn_diff:+.2f})")
             report_lines.append("")
     
     return "\n".join(report_lines)
@@ -692,10 +701,10 @@ def main():
     torch.manual_seed(args.seed)
     
     print("=" * 60)
-    print("Model Evaluation: Base vs DPO-Tuned")
+    print("Model Evaluation: Base vs Fine-Tuned")
     print("=" * 60)
     print(f"Base model: {args.base_model}")
-    print(f"DPO model: {args.dpo_model_path}")
+    print(f"Fine-tuned model: {args.model_path}")
     print(f"Datasets: {args.datasets}")
     print(f"Split: {args.split}")
     print(f"Samples per dataset: {args.num_samples}")
@@ -705,7 +714,7 @@ def main():
     print("")
     print("Evaluation approach:")
     print("  - LFR = % where BASE model's prediction changed (not ground truth)")
-    print("  - BASE model judges ALL CFs (both base and DPO generated)")
+    print("  - BASE model judges ALL CFs (both base and fine-tuned)")
     if args.base_eval_dir:
         print("  - REUSING base model CFs from previous evaluation (fair A/B comparison)")
     print("=" * 60)
@@ -793,29 +802,28 @@ def main():
             resume=args.resume,
         )
     
-    # Step 3: Generate CFs with DPO model
+    # Step 3: Generate CFs with fine-tuned model
     print("\n" + "=" * 60)
-    print("Step 3: Loading DPO model and generating CFs...")
+    print("Step 3: Loading fine-tuned model and generating CFs...")
     print("=" * 60)
-    dpo_model = load_dpo_model(base_model, args.dpo_model_path)
+    tuned_model = load_finetuned_model(base_model, args.model_path)
     
-    dpo_cf_results = generate_counterfactuals_for_model(
-        model=dpo_model,
+    tuned_cf_results = generate_counterfactuals_for_model(
+        model=tuned_model,
         tokenizer=tokenizer,
         sampled_data=sampled_data,
         cfs_per_entry=args.cfs_per_entry,
-        model_name="dpo",
+        model_name="tuned",
         output_dir=output_dir,
         resume=args.resume,
     )
     
-    # Unload DPO model to free memory for verification
-    del dpo_model
+    del tuned_model
     torch.cuda.empty_cache()
     
     # Add entry context for verification
     base_cf_results = add_entry_context(base_cf_results, sampled_data)
-    dpo_cf_results = add_entry_context(dpo_cf_results, sampled_data)
+    tuned_cf_results = add_entry_context(tuned_cf_results, sampled_data)
     
     # Step 4: Verify ALL CFs using BASE model
     print("\n" + "=" * 60)
@@ -831,13 +839,13 @@ def main():
         model_source="base",
     )
     
-    dpo_cf_results = verify_counterfactuals_with_base_model(
+    tuned_cf_results = verify_counterfactuals_with_base_model(
         base_model=base_model,
         tokenizer=tokenizer,
-        cf_results=dpo_cf_results,
+        cf_results=tuned_cf_results,
         original_predictions=original_predictions,
         output_dir=output_dir,
-        model_source="dpo",
+        model_source="tuned",
     )
     
     # Step 5: Compute metrics and generate report
@@ -846,13 +854,13 @@ def main():
     print("=" * 60)
     
     base_metrics = compute_metrics(base_cf_results)
-    dpo_metrics = compute_metrics(dpo_cf_results)
+    tuned_metrics = compute_metrics(tuned_cf_results)
     
     # Save detailed JSON results
     save_json({
         "config": {
             "base_model": args.base_model,
-            "dpo_model_path": args.dpo_model_path,
+            "model_path": args.model_path,
             "datasets": args.datasets,
             "split": args.split,
             "num_samples": args.num_samples,
@@ -861,21 +869,21 @@ def main():
         },
         "evaluation_approach": {
             "lfr_definition": "% where BASE model prediction changed from original",
-            "judge": "BASE model for all CFs (both base and DPO generated)",
+            "judge": "BASE model for all CFs (both base and fine-tuned)",
         },
         "base_metrics": base_metrics,
-        "dpo_metrics": dpo_metrics,
+        "tuned_metrics": tuned_metrics,
     }, str(output_dir / "eval_summary.json"))
     
     # Save full results
     save_json({
         "original_predictions": {f"{k[0]}|{k[1]}": v for k, v in original_predictions.items()},
         "base_results": base_cf_results,
-        "dpo_results": dpo_cf_results,
+        "tuned_results": tuned_cf_results,
     }, str(output_dir / "eval_full.json"))
     
     # Generate and save report
-    report = generate_report(base_metrics, dpo_metrics, args.base_eval_dir)
+    report = generate_report(base_metrics, tuned_metrics, args.base_eval_dir)
     with open(output_dir / "eval_report.md", "w") as f:
         f.write(report)
     
