@@ -796,7 +796,7 @@ def main():
     tokenizer.save_pretrained(args.output_dir)
 
     print(f"\nDone! Model saved to {args.output_dir}")
-    print(f"Evaluate with: python evaluate_models.py --dpo_model_path {args.output_dir} --datasets {args.dataset_name}")
+    print(f"Evaluate with: python evaluate_models.py --model_path {args.output_dir} --datasets {args.dataset_name}")
 
 
 if __name__ == "__main__":
