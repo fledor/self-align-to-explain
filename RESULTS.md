@@ -8,10 +8,11 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 - **ΔLFR**: LFR improvement over the base model on the same evaluation set
 - **NED** (Normalized Edit Distance): edit distance / max text length (lower = more minimal edits)
 - **PPL** (Perplexity): fluency of generated text (lower = more fluent)
+- **LFR/NED**: label flip rate / normalized edit distance — edit efficiency (higher = more effective per unit of change). Reported in individual eval reports for N=200 runs.
 - **Fair**: whether base model counterfactuals were reused across evaluations (`--base_eval_dir`) for consistent comparison
 - **N**: number of validation samples evaluated (10 CFs generated per sample)
 
-**Methods**: DPO (preference optimization), SFT (supervised fine-tuning on chosen CFs), GRPO (online RL with reward signal)
+**Methods**: DPO (preference optimization), SFT (supervised fine-tuning on chosen CFs), GRPO (online RL with reward signal), GDPO (GRPO with per-reward normalization)
 
 **Configs**: `{pairs} {batch}` where pairs = number of preference pairs per entry, batch = effective batch size (b4 = bs1×ga4, b16 = bs4×ga4). GRPO configs: `single` = combined reward, `multi` = decomposed rewards, `g4`/`g16` = generations per prompt.
 
@@ -54,12 +55,19 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 | SFT    | 2pair b16 | 1ep      | 35.6% | -7.0%  | 0.158 | 11.4 | yes  | 100 |
 | DPO    | 1pair b4  | 200step  | 35.4% | -7.8%  | 0.130 | 11.7 | yes  | 100 |
 | SFT    | 1pair b4  | 0.5ep    | 33.6% | -9.1%  | 0.169 | 11.8 | yes  | 100 |
+| GDPO   | mv2 g16   | ckpt200  | 36.3% | -6.1%  | 0.166 | 11.5 | yes  | 100 |
+| GRPO   | mv2 g16 lr1e6 | ~0.25ep | 36.2% | -6.5% | 0.153 | 11.3 | yes  | 100 |
+| GRPO   | mv2 g16   | ~0.25ep  | 35.4% | -7.1%  | 0.161 | 11.4 | yes  | 100 |
 | GRPO   | v2 g16    | ~0.11ep  | 34.9% | -8.3%  | 0.155 | 11.8 | yes  | 100 |
+| GRPO   | v2 g16 lr1e6 | ~0.11ep | 33.9% | -8.9% | 0.153 | 11.7 | yes  | 100 |
 | GRPO   | multi g16 | ~0.11ep  | 33.9% | -9.3%  | 0.163 | 11.5 | yes  | 100 |
 | GRPO † | single g4 | 2ep      | 33.0% | -10.4% | 0.126 | 11.0 | yes  | 100 |
 | GRPO   | multi g4  | 2ep      | 33.1% | -10.2% | 0.127 | 43.3 | yes  | 100 |
 | GRPO   | multi g16 | ~0.25ep  | 18.5% | -24.7% | 0.085 | 11.7 | yes  | 100 |
+| GRPO   | multi g16 | ~0.85ep  | 11.0% | -32.9% | 0.295 | 9.0  | yes  | 100 |
+| GRPO   | v2 g16    | ~0.75ep  | 10.3% | -33.6% | 0.261 | 10.0 | yes  | 100 |
 | GRPO   | v2 g16    | ~0.50ep  |  8.4% | -35.4% | 0.241 | 10.6 | yes  | 100 |
+| GRPO   | multi g16 | ~0.50ep  |  8.3% | -35.5% | 0.168 | 14.1 | yes  | 100 |
 | GRPO   | v2 g16    | ~0.25ep  |  7.2% | -36.5% | 0.088 | 21.4 | yes  | 100 |
 
 
@@ -68,6 +76,8 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 
 | Method | Config    | Duration | LFR   | ΔLFR   | NED   | PPL   | Fair | N   |
 | ------ | --------- | -------- | ----- | ------ | ----- | ----- | ---- | --- |
+| GRPO   | mv2 g16   | 1.0ep    | 79.7% | +27.5% | 0.348 | 72.7  | yes  | 200 |
+| GRPO   | v2 g16    | ~0.50ep  | 78.0% | +25.8% | 0.345 | 110.6 | yes  | 200 |
 | DPO    | 2pair b4  | 2ep      | 75.0% | +22.0% | 0.327 | 142.3 | no   | 200 |
 | DPO    | 2pair b4  | 2ep      | 71.5% | +17.3% | 0.326 | —     | yes  | 100 |
 | DPO    | 2pair b16 | 2ep      | 70.5% | +17.2% | 0.321 | 83.6  | yes  | 100 |
@@ -81,6 +91,9 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 | DPO    | 2pair b4  | 200step  | 61.2% | +9.7%  | 0.276 | 94.8  | no   | 100 |
 | DPO    | 1pair b16 | 3ep      | 63.0% | +9.3%  | 0.297 | 94.1  | yes  | 100 |
 | DPO    | 1pair b4  | 200step  | 60.2% | +7.9%  | 0.257 | 75.0  | no   | 50  |
+| GDPO   | mv2 g16   | 1.0ep    | 54.2% | +2.5%  | 0.222 | 157.4 | yes  | 200 |
+| SFT    | 1pair b4  | 200step  | 50.5% | -1.7%  | 0.246 | 144.4 | yes  | 200 |
+| GRPO   | mv2 g16   | 1.0ep    | 82.7% | +29.0% | 0.356 | 69.7  | yes  | 100 |
 | GRPO   | v2 g16    | ~0.50ep  | 82.3% | +28.7% | 0.347 | 89.1  | yes  | 100 |
 | GRPO   | v2 g16    | ~0.25ep  | 80.7% | +27.2% | 0.359 | 70.7  | yes  | 100 |
 | GRPO   | v2 g16    | 1.0ep    | 77.6% | +24.4% | 0.341 | 94.7  | yes  | 100 |
@@ -89,6 +102,8 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 | GRPO   | multi g16 | ~0.25ep  | 65.5% | +12.0% | 0.299 | 84.5  | yes  | 100 |
 | GRPO   | multi g16 | ~0.62ep  | 61.2% | +8.3%  | 0.276 | 151.1 | yes  | 100 |
 | GRPO   | multi g4  | 2ep      | 60.2% | +7.2%  | 0.275 | 85.1  | yes  | 100 |
+| GDPO   | mv2 g16   | 1.0ep    | 60.6% | +7.2%  | 0.228 | 146.9 | yes  | 100 |
+| GDPO   | mv2 g16   | 1.0ep    | 54.2% | +2.5%  | 0.222 | 157.4 | yes  | 200 |
 | GRPO   | multi g16 | ~0.88ep  | 59.3% | +6.1%  | 0.838 | 18738 | yes  | 100 |
 | GRPO † | single g4 | 2ep      | 58.7% | +5.4%  | 0.266 | 92.4  | yes  | 100 |
 | GRPO   | v2 g16    | ~0.06ep  | 52.9% | -1.0%  | 0.256 | 111.0 | yes  | 100 |
@@ -118,6 +133,10 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 | Method | Config    | Duration | LFR   | ΔLFR   | NED   | PPL   | Fair | N   |
 | ------ | --------- | -------- | ----- | ------ | ----- | ----- | ---- | --- |
 | DPO    | 2pair b4  | 2ep      | 65.9% | +21.0% | 0.378 | 296.5 | yes  | 200 |
+| GRPO   | mv2 g16   | 1.0ep    | 59.4% | +15.1% | 0.266 | 702.9 | yes  | 200 |
+| GRPO   | v2 g16    | 1.0ep    | 55.7% | +11.0% | 0.269 | 317.3 | yes  | 200 |
+| DPO    | 1pair b4  | 2ep      | 53.4% | +8.7%  | 0.334 | 368.0 | no   | 200 |
+| SFT    | 2pair b4  | 2ep      | 46.1% | +1.7%  | 0.329 | 286.8 | yes  | 200 |
 | DPO    | 1pair b4  | 2ep      | 53.4% | +8.7%  | 0.334 | 368.0 | no   | 200 |
 | DPO    | 2pair b4  | 200step  | 44.3% | +8.4%  | 0.276 | 164.1 | no   | 50  |
 | DPO    | 1pair b4  | 2ep      | 54.3% | +7.5%  | 0.339 | 390.6 | yes  | 100 |
@@ -145,6 +164,7 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 | SFT    | 2pair b16 | 0.5ep    | 41.9% | -5.1%  | 0.326 | 385.0 | yes  | 100 |
 | SFT    | 1pair b4  | 0.5ep    | 41.7% | -5.3%  | 0.328 | 271.4 | yes  | 100 |
 | SFT    | 1pair b4  | 1ep      | 40.7% | -6.1%  | 0.343 | 211.0 | yes  | 100 |
+| GRPO   | mv2 g16   | 1.0ep    | 58.4% | +11.5% | 0.285 | 455.6 | yes  | 100 |
 | GRPO   | v2 g16    | 1.0ep    | 54.3% | +7.3%  | 0.285 | 374.4 | yes  | 100 |
 | GRPO   | v2 g16    | ~0.50ep  | 53.5% | +6.3%  | 0.276 | 370.6 | yes  | 100 |
 | GRPO   | v2 g16    | ~0.75ep  | 52.9% | +6.2%  | 0.276 | 450.8 | yes  | 100 |
@@ -160,18 +180,17 @@ All evaluation results for counterfactual generation models trained on Qwen/Qwen
 | GRPO   | multi g16 | ~0.75ep  | 35.4% | -11.8% | 0.095 | 251.8 | yes  | 100 |
 | GRPO   | multi g16 | 1.0ep    | 30.9% | -16.5% | 0.091 | 300.2 | yes  | 100 |
 | GRPO   | multi g16 | ~0.62ep  | 28.6% | -18.2% | 0.089 | 363.8 | yes  | 100 |
+| GDPO   | mv2 g16   | 1.0ep    | 26.5% | -20.0% | 0.083 | 379.7 | yes  | 100 |
+| GDPO   | mv2 g16   | 1.0ep    | 22.4% | -22.0% | 0.075 | 349.0 | yes  | 200 |
 
 
 ---
 
 ## Pending Evaluations
 
-
-| Model               | Dataset | Status                     |
-| ------------------- | ------- | -------------------------- |
-| GRPO v2 g16 ckpt-6000 | BoolQ | resubmitted (timed out, all CFs generated, needs summary) |
-| GRPO multi g16 ckpt-4000 | BoolQ | resubmitted (timed out at 94/100 entries) |
-| GRPO multi g16 ckpt-6800 | BoolQ | resubmitted (timed out at 79/100 entries) |
+- N=200 BoolQ re-evaluations — 5 jobs running (SFT, GRPO v2, GRPO mv2, GRPO mv2 lr1e6, GDPO)
+- GDPO lr=1e-6 (format weight 3x) — training pending for all 3 datasets, eval jobs queued
+- g24 experiments — 9 training jobs pending (GRPO v2, GRPO mv2, GDPO for all 3 datasets), eval jobs queued
 
 
 ---
@@ -198,4 +217,8 @@ All models use QLoRA (4-bit quantization), LoRA r=32, alpha=16, lr=5e-6 on Qwen/
 - **GRPO g4/g16**: online RL, 4 or 16 generations per prompt, temperature=1.2, combined or decomposed reward. g4 trained for 2ep; g16 trains for 1ep (see [GRPO_ANALYSIS.md](GRPO_ANALYSIS.md) for epoch analysis)
 - **GRPO † (old reward)**: single reward = `flip + 0.8 * similarity` (no confidence weighting)
 - **GRPO v2 (corrected reward)**: single reward = `flip + confidence * similarity` (matches DPO unified score)
+- **GRPO mv2 (multi-reward v2)**: 4 decomposed rewards: FlipReward + SimilarityReward + GatedConfidenceReward + FormatReward
+- **GRPO lr1e6**: same reward as parent config but trained at lr=1e-6 (vs default 5e-6) to prevent BoolQ instability
+- **GDPO**: GRPO with per-reward normalization (normalize each reward independently per group, then sum). Uses mv2 reward functions. See `gdpo_trainer.py`
+- **g24**: experiments with 24 generations per prompt (vs 16) for better group diversity and reward signal
 

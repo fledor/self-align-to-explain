@@ -17,7 +17,7 @@ This project investigates how different post-training methods affect a language 
 | **SFT** | Supervised Fine-Tuning on successful counterfactuals only |
 | **DPO** | Direct Preference Optimization on pre-generated preference pairs |
 | **GRPO** | Group Relative Policy Optimization with reward-driven generation during training |
-| **GDPO** | Group reward-Decoupled normalization Policy Optimization (planned) |
+| **GDPO** | Group reward-Decoupled normalization Policy Optimization (per-reward normalization) |
 
 ---
 
@@ -163,18 +163,35 @@ python train_sft.py \
 python train_grpo.py \
     --dataset_name boolq \
     --max_entries 2000 \
-    --output_dir ./results/grpo_model_boolq_2ep \
-    --num_train_epochs 2 --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
-    --num_generations 4 --max_completion_length 512 --temperature 1.2 \
+    --output_dir ./results/grpo_model_boolq_1ep_g16 \
+    --num_train_epochs 1 --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
+    --num_generations 16 --max_completion_length 512 --temperature 1.2 \
     --use_4bit --bf16 --gradient_checkpointing \
-    --use_wandb --wandb_run_name "grpo-boolq-2ep"
+    --use_wandb --wandb_run_name "grpo-boolq-1ep-g16"
 ```
 
 > **Key difference**: GRPO generates counterfactuals **during training** and learns from a reward signal. No pre-generated training data needed — it loads raw entries directly from the dataset registry. The reward function uses the base model (LoRA adapters temporarily disabled) as the judge, matching the evaluation pipeline.
 >
-> Two reward modes are supported:
-> - **Single reward** (default): Combined score `flip_bonus + confidence * similarity`, mirroring the DPO unified score
-> - **Multi-reward** (`--multi_reward`): Decomposed `FlipReward` + `SimilarityReward` (+ optional `MinimalityReward` with `--use_minimality_reward`), each tracked independently by TRL
+> Three reward configurations have been tested:
+> - **Single v2** (default): One composite score `flip + confidence * similarity`, mirroring the DPO unified score
+> - **Multi-reward v2** (`--multi_reward`): Four decomposed rewards — `FlipReward` (binary label flip), `SimilarityReward` (cosine similarity), `GatedConfidenceReward` (confidence gated on flip — only rewards high confidence if the label actually flipped), and `FormatReward` (binary valid `<edit>` tag check). The gated confidence provides a cleaner signal than the single reward's unconditional `confidence * similarity`, and the format reward prevents format collapse on BoolQ.
+> - **Multi-reward v1** (historical): Two decomposed rewards (flip + similarity only). Collapsed catastrophically on all datasets; superseded by v2.
+
+**Option D: GDPO (Group reward-Decoupled normalization Policy Optimization)**
+```bash
+python train_gdpo.py \
+    --dataset_name boolq \
+    --max_entries 2000 \
+    --output_dir ./results/gdpo_model_boolq_1ep_g16 \
+    --num_train_epochs 1 --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
+    --num_generations 16 --max_completion_length 512 --temperature 1.2 \
+    --use_4bit --bf16 --gradient_checkpointing \
+    --use_wandb --wandb_run_name "gdpo-boolq-1ep-g16"
+```
+
+> GDPO extends GRPO for multi-reward settings. Instead of summing rewards then normalizing per group, GDPO normalizes each reward independently before combining. This prevents high-magnitude rewards from dominating the advantage signal.
+>
+> Always uses the multi-reward v2 set: flip, similarity, gated confidence, and format.
 
 All methods use QLoRA (4-bit quantization) and produce LoRA adapters.
 
@@ -187,7 +204,7 @@ python evaluate_models.py \
     --dpo_model_path ./results/dpo_model_boolq_100e40c \  # or sft_model_*
     --datasets boolq \
     --split validation \
-    --num_samples 50 \
+    --num_samples 200 \
     --cfs_per_entry 5 \
     --output_dir ./results/evaluation_boolq_100e40c \
     --base_eval_dir ./results/evaluation_boolq_prev \    # Optional: reuse base CFs for fair A/B
@@ -351,23 +368,24 @@ See `RESULTS.md` for full experimental results and `OVERVIEW.md` for a detailed 
 
 ### Best ΔLFR per method per dataset
 
+SNLI results at N=200; BoolQ N=200 evals running (N=100 shown).
+
 | Method | BoolQ | SNLI-Premise | SNLI-Hypothesis |
 |--------|:-----:|:------------:|:---------------:|
-| **DPO** | **+9.4%** | **+17.3%** | **+7.5%** |
-| SFT | +4.1% | +2.7% | +1.8% |
-| GRPO (g4) | *pending* | +7.2% | -10.6% |
-| GRPO (g16) | *pending* | *pending* | *pending* |
-| GDPO | *planned* | *planned* | *planned* |
+| **DPO** | **+9.4%** | +22.0% | **+21.0%** |
+| SFT | +4.1% | -1.7% | +1.7% |
+| GRPO (g16 v2) | -8.3% | +25.8% | +11.0% |
+| GRPO (g16 mv2) | -6.5% | **+27.5%** | +15.1% |
 
 > ΔLFR = improvement in label flip rate over the base model (per-run). Base LFR varies 2-5pp across eval runs due to bf16 inference differences across GPU types. See `OVERVIEW.md` for details.
 
 **Key findings:**
-- **DPO outperforms SFT** on all datasets, winning 8 of 9 head-to-head comparisons at equal training duration
-- **2 epochs** is optimal for DPO; SFT overfits quickly and peaks at ~0.3-0.5 epochs
-- **Smaller batch (b4)** with more gradient updates outperforms larger batch (b16) at equal epochs
-- **2-pair ≥ 1-pair** when trained long enough (the original "1-pair is better" finding was a training duration artifact)
-- GRPO (g4) suffers from **reward advantage collapse** — with only 4 generations per prompt, all completions often receive identical rewards, producing zero learning signal. GRPO g16 reruns are in progress to address this
-- SFT can hurt performance (negative ΔLFR on SNLI-H), while DPO consistently improves
+- **GRPO mv2 (multi-reward v2) is the best method on SNLI-P**: +27.5% vs DPO's +22.0%
+- **DPO leads on SNLI-H** at N=200 (+21.0%), though GRPO mv2 (+15.1%) achieves much smaller edits (NED 0.27 vs 0.38)
+- **Reward design matters**: mv2's gated confidence and format rewards dramatically improve over single v2
+- **DPO outperforms SFT** on all datasets; SFT overfits quickly and peaks at ~0.3-0.5 epochs
+- **Early stopping is critical** for GRPO: SNLI-P peaks at 0.5ep, SNLI-H improves through 1.0ep
+- **BoolQ remains challenging** for all GRPO variants due to format collapse (long outputs lose `<edit>` tag structure)
 
 ---
 
@@ -411,8 +429,9 @@ cfg-dpo/
 ├── train_sft.py                   # Stage 4: SFT training (chosen only)
 │
 │   # Training scripts (online methods)
-├── train_grpo.py                   # Stage 4: GRPO (generation during training)
-│   # train_gdpo.py                # Stage 4: GDPO (decoupled reward normalization, planned)
+├── train_grpo.py                  # Stage 4: GRPO (generation during training)
+├── train_gdpo.py                  # Stage 4: GDPO (per-reward normalization)
+├── gdpo_trainer.py                # GDPOTrainer subclass (normalize-then-sum)
 │
 ├── evaluate_models.py             # Stage 5: Model comparison
 │
@@ -511,9 +530,10 @@ All training scripts support `--use_wandb` with a descriptive `--wandb_run_name`
 
 ## Future Work
 
-- **GRPO g16 reruns** — All GRPO experiments are being rerun with `num_generations=16` to mitigate reward advantage collapse observed with `num_generations=4`.
-- **GDPO** — Group reward-Decoupled normalization Policy Optimization ([Liu et al., 2026](https://arxiv.org/abs/2601.05242)). Extends multi-reward GRPO with per-reward normalization to further address reward collapse across objectives.
-- **Benchmark evaluation** — Evaluate trained models on standard benchmarks (MMLU, HellaSwag, ARC) to check for capability degradation.
+- **g24 experiments** — Testing 24 generations per prompt (vs 16) for better group diversity in GRPO and GDPO
+- **GDPO tuning** — Low-LR (1e-6) and g24 runs in progress to address entropy collapse
+- **BoolQ improvements** — Increase `max_completion_length`, SFT warm-start, or task-specific reward shaping
+- **Benchmark evaluation** — Evaluate trained models on standard benchmarks (MMLU, HellaSwag, ARC) to check for capability degradation
 
 ## License
 

@@ -234,7 +234,47 @@ Critically, entropy does NOT collapse to zero on BoolQ (it stays at 0.01-0.05 th
 
 SNLI-P v2 maintains healthy training throughout 1.0ep: completion lengths stay in 16-39 tokens, valid outputs remain 16/16 for most steps, and reward signal is sustained. The short completion length leaves little room for format drift.
 
-## 9. Summary of Experiments
+## 9. Multi-Reward v2: Addressing Format Collapse
+
+The original multi-reward (flip + similarity) collapsed catastrophically on all datasets. Multi-reward v2 addresses this with two additional reward signals:
+
+### New Reward Components
+
+1. **GatedConfidenceReward**: Returns the base model's confidence score when the label flipped, 0.0 otherwise. Uses a `PredictionCache` shared with `FlipReward` to avoid redundant model calls. This incentivizes high-confidence flips without rewarding high-confidence non-flips.
+
+2. **FormatReward**: Binary reward — 1.0 if the completion contains valid `<edit>...</edit>` tags, 0.0 otherwise. Directly addresses BoolQ's format collapse failure mode (section 8).
+
+### MV2 Training Results
+
+**SNLI-P and SNLI-H**: Training completed successfully (1.0ep). FormatReward stayed at 1.0 throughout — format collapse is not an issue for SNLI. Entropy collapse eventually occurs as expected. Evaluations pending.
+
+**BoolQ**: Timed out at ~0.83ep but showed a qualitatively different training trajectory than earlier runs:
+- FormatReward *does* provide differential signal (not always 1.0)
+- Model partially recovered from format collapse around 0.775ep
+- However, catastrophic loss spikes persisted (loss to 86,680 at 0.34ep, grad_norm to 8.7B at 0.56ep)
+- Root cause: learning rate 5e-6 is too aggressive for BoolQ's long outputs
+
+### BoolQ Low-LR Hypothesis
+
+The loss/gradient explosions on BoolQ suggest the default lr=5e-6 causes catastrophic overshooting. Two low-LR experiments submitted (lr=1e-6):
+- BoolQ v2 g16 lr=1e-6 (single-reward)
+- BoolQ mv2 g16 lr=1e-6 (multi-reward v2)
+
+If the FormatReward can prevent format collapse AND a lower LR prevents gradient explosions, BoolQ GRPO may finally produce stable training.
+
+## 10. GDPO: Per-Reward Normalization
+
+Standard GRPO multi-reward sums rewards then normalizes advantages per group. This allows high-magnitude rewards to dominate the advantage signal. GDPO (Group reward-Decoupled normalization) reverses this:
+
+1. Normalize each reward independently per group (subtract group mean, divide by group std)
+2. Weight and sum the normalized per-reward advantages
+3. Apply batch-level normalization to the combined advantages
+
+Implemented as `GDPOTrainer` in `gdpo_trainer.py`, subclassing TRL's `GRPOTrainer`. Uses `_RewardCapture` wrappers around reward functions to intercept raw per-reward outputs, then recomputes advantages using the GDPO formula. Training script: `train_gdpo.py`.
+
+GDPO training jobs submitted for all 3 datasets (g16, 1ep, lr=5e-6). Uses the same mv2 reward set (flip, similarity, gated_confidence, format).
+
+## 11. Summary of Experiments
 
 | Experiment | Status | Key Result |
 |------------|--------|------------|
@@ -242,10 +282,24 @@ SNLI-P v2 maintains healthy training throughout 1.0ep: completion lengths stay i
 | g4 SNLI-H checkpoint sweep | Completed | Best at ckpt-400 (~0.1ep), -3.3% |
 | g16 old-reward (6 models) | Completed | Baseline g16, ~0.8-1.1ep |
 | g16 v2 corrected reward (3 models) | Completed | SNLI-P +28.7%, SNLI-H +7.3% |
-| g16 checkpoint sweep (22 evals) | 19/22 completed | v2 >> multi; early stopping essential |
+| g16 checkpoint sweep (22 evals) | Completed | v2 >> multi; early stopping essential |
+| g16 multi-reward v2 (3 models) | Completed | SNLI-P +27.5%, SNLI-H +15.1% (N=200) |
+| BoolQ low-LR (v2 + mv2) | Completed | Stable training, ΔLFR still negative |
+| GDPO g16 (3 models) | Completed | Entropy collapse at lr=5e-6; tuning in progress |
+| g24 (GRPO v2/mv2 + GDPO, 9 models) | Training | 24 generations per prompt for better group diversity |
 
-## 9. Reward Formula Correction
+## 12. Reward Formula Correction
 
 The original single reward was `flip + 0.8 * similarity`, where the 0.8 weight was arbitrary. This has been corrected to `flip + confidence * similarity`, matching the DPO unified score structure. The v2 g16 jobs use the corrected formula. Multi-reward runs (separate FlipReward + SimilarityReward) are unaffected.
 
-The reward correction proved transformative: v2 results on SNLI-P (+28.7%) and SNLI-H (+7.3%) are dramatically better than the old single-reward g4 results (+5.4% and -10.6%), suggesting that confidence weighting provides a much more informative gradient signal than a fixed weight.
+The reward correction proved transformative: v2 results on SNLI-P (+25.8% at N=200) and SNLI-H (+11.0% at N=200) are dramatically better than the old single-reward g4 results (+5.4% and -10.6%), suggesting that confidence weighting provides a much more informative gradient signal than a fixed weight.
+
+## 13. N=200 Re-Evaluation
+
+All best models were re-evaluated at N=200 (up from N=100) for more reliable comparisons. Key observations:
+
+- **GRPO mv2 remains the best overall method**: SNLI-P +27.5%, SNLI-H +15.1%
+- **SNLI-H mv2 improved at N=200**: +15.1% vs +11.5% at N=100, confirming the gated confidence benefit
+- **DPO SNLI-H improved substantially**: +21.0% (N=200) vs +7.5% (N=100), indicating high evaluation variance on this dataset at N=100
+- **LFR/NED efficiency metric** added: GRPO mv2 achieves LFR/NED of 2.29 (SNLI-P) and 2.23 (SNLI-H), compared to base model's ~2.16 and ~1.38 respectively
+- BoolQ N=200 results pending
