@@ -92,6 +92,14 @@ def parse_args():
                         help="KL penalty coefficient (0.0 = no KL, per DeepSeek R1)")
     parser.add_argument("--epsilon", type=float, default=0.2,
                         help="GRPO clipping epsilon")
+    parser.add_argument("--epsilon_high", type=float, default=None,
+                        help="Upper-bound epsilon for asymmetric clipping (DAPO). "
+                             "If set, uses loss_type='dapo' with clip range [1-epsilon, 1+epsilon_high].")
+    parser.add_argument("--conditioned_rewards", action="store_true",
+                        help="Use ConditionedSimilarityReward (similarity gated on flip) "
+                             "instead of standard SimilarityReward.")
+    parser.add_argument("--ned_penalty_alpha", type=float, default=0.0,
+                        help="NED penalty alpha for non-flipping completions in conditioned rewards.")
     parser.add_argument("--generation_batch_size", type=int, default=None,
                         help="Generation batch size (must be divisible by num_generations). "
                              "Defaults to per_device_train_batch_size * gradient_accumulation_steps.")
@@ -100,6 +108,8 @@ def parse_args():
     parser.add_argument("--logging_steps", type=int, default=1)
     parser.add_argument("--save_steps", type=int, default=100)
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None,
+                        help="Path to checkpoint dir or 'true' to auto-detect latest")
 
     # W&B
     parser.add_argument("--use_wandb", action="store_true")
@@ -114,6 +124,10 @@ def parse_args():
                         help="Weights for each reward function (default: equal weight 1.0)")
     parser.add_argument("--use_minimality_reward", action="store_true",
                         help="Include edit-distance-based minimality reward (multi_reward only)")
+    parser.add_argument("--multi_objective_aggregation", type=str, default="sum_then_normalize",
+                        choices=["sum_then_normalize", "normalize_then_sum"],
+                        help="Multi-reward aggregation strategy. 'normalize_then_sum' = GDPO "
+                             "(per-reward group norm then batch norm). Default: 'sum_then_normalize' (standard GRPO).")
 
     return parser.parse_args()
 
@@ -469,6 +483,60 @@ class SimilarityReward:
         return rewards
 
 
+class ConditionedSimilarityReward:
+    """Similarity reward conditioned on label flip success.
+
+    When the label flips: returns cosine similarity (positive, rewards minimal edits).
+    When no flip: returns -ned_penalty_alpha * NED (negative, penalizes large
+    useless edits). This extends the GDPO paper's binary gating (Sec 4.2) with
+    reward shaping that recovers gradient signal from all-non-flip groups.
+
+    The penalty coefficient (ned_penalty_alpha) controls the strength:
+      0.0 = pure binary gating (original behavior)
+      0.2 = mild penalty for wasted edits (recommended)
+    """
+
+    __name__ = "conditioned_similarity_reward"
+
+    def __init__(self, similarity_model, prediction_cache: PredictionCache,
+                 ned_penalty_alpha: float = 0.0):
+        self.similarity_model = similarity_model
+        self.prediction_cache = prediction_cache
+        self.ned_penalty_alpha = ned_penalty_alpha
+
+    def set_model(self, model):
+        pass
+
+    def __call__(self, completions, **kwargs):
+        import Levenshtein
+
+        original_texts = kwargs.get("original_text", [])
+
+        edited_texts = []
+        for completion in completions:
+            content = completion[0]["content"] if isinstance(completion, list) else completion
+            edited_texts.append(parse_edit_tag(content))
+
+        rewards = []
+        for i in range(len(completions)):
+            flipped, _ = self.prediction_cache.get(i)
+            if edited_texts[i] is None:
+                rewards.append(0.0)
+            elif flipped:
+                rewards.append(_compute_similarity(
+                    self.similarity_model, original_texts[i], edited_texts[i]
+                ))
+            elif self.ned_penalty_alpha > 0:
+                dist = Levenshtein.distance(original_texts[i], edited_texts[i])
+                max_len = max(len(original_texts[i]), len(edited_texts[i]))
+                ned = dist / max_len if max_len > 0 else 0.0
+                rewards.append(-self.ned_penalty_alpha * ned)
+            else:
+                rewards.append(0.0)
+
+        return rewards
+
+
 class GatedConfidenceReward:
     """Confidence reward gated on label flip: returns confidence if flipped, 0.0 otherwise.
 
@@ -619,6 +687,10 @@ def main():
     print(f"Generations per prompt: {args.num_generations}")
     print(f"Temperature: {args.temperature}")
     print(f"Beta (KL): {args.beta}")
+    if args.epsilon_high:
+        print(f"Epsilon: {args.epsilon} / {args.epsilon_high} (asymmetric)")
+    if args.conditioned_rewards:
+        print(f"Conditioned rewards: yes (ned_penalty_alpha={args.ned_penalty_alpha})")
     print("=" * 60)
 
     # Load tokenizer
@@ -647,14 +719,23 @@ def main():
 
     # Create reward function(s) (model reference set after trainer creation)
     if args.multi_reward:
-        print("\nMulti-reward mode (v2): flip + similarity + gated_confidence + format")
+        agg_mode = args.multi_objective_aggregation
+        gdpo_label = " [GDPO normalize_then_sum]" if agg_mode == "normalize_then_sum" else ""
         cache = PredictionCache()
         flip_fn = FlipReward(tokenizer, args.dataset_name, prediction_cache=cache)
-        sim_fn = SimilarityReward(similarity_model)
+        if args.conditioned_rewards:
+            alpha_str = f", ned_penalty={args.ned_penalty_alpha}" if args.ned_penalty_alpha > 0 else ""
+            print(f"\nMulti-reward mode (v2, conditioned{alpha_str}){gdpo_label}: flip + cond_similarity + gated_confidence + format")
+            sim_fn = ConditionedSimilarityReward(similarity_model, cache,
+                                                 ned_penalty_alpha=args.ned_penalty_alpha)
+            reward_fn_names = ["flip", "cond_similarity", "gated_confidence", "format"]
+        else:
+            print(f"\nMulti-reward mode (v2){gdpo_label}: flip + similarity + gated_confidence + format")
+            sim_fn = SimilarityReward(similarity_model)
+            reward_fn_names = ["flip", "similarity", "gated_confidence", "format"]
         conf_fn = GatedConfidenceReward(cache)
         fmt_fn = FormatReward()
         reward_fns_list = [flip_fn, sim_fn, conf_fn, fmt_fn]
-        reward_fn_names = ["flip", "similarity", "gated_confidence", "format"]
         if args.use_minimality_reward:
             min_fn = MinimalityReward()
             reward_fns_list.append(min_fn)
@@ -712,6 +793,8 @@ def main():
                 "num_generations": args.num_generations,
                 "temperature": args.temperature,
                 "beta": args.beta,
+                "epsilon_high": args.epsilon_high,
+                "conditioned_rewards": args.conditioned_rewards,
                 "method": "grpo",
                 "multi_reward": args.multi_reward,
                 "reward_weights": args.reward_weights,
@@ -735,6 +818,7 @@ def main():
         top_k=100,
         beta=args.beta,
         epsilon=args.epsilon,
+        epsilon_high=args.epsilon_high,
         loss_type="dapo",
         remove_unused_columns=False,
         bf16=args.bf16,
@@ -753,6 +837,8 @@ def main():
         grpo_config_kwargs["generation_batch_size"] = args.generation_batch_size
     if args.multi_reward and args.reward_weights:
         grpo_config_kwargs["reward_weights"] = args.reward_weights
+    if args.multi_reward:
+        grpo_config_kwargs["multi_objective_aggregation"] = args.multi_objective_aggregation
 
     grpo_config = GRPOConfig(**grpo_config_kwargs)
 
@@ -787,7 +873,12 @@ def main():
     print(f"  Estimated steps per epoch: {steps_per_epoch}")
     print()
 
-    trainer.train()
+    resume = args.resume_from_checkpoint
+    if resume and resume.lower() == "true":
+        resume = True
+    if resume:
+        print(f"  Resuming from checkpoint: {resume}")
+    trainer.train(resume_from_checkpoint=resume)
     print("\nTraining completed!")
 
     # Save final model

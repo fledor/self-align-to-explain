@@ -420,7 +420,6 @@ def main():
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.learning_rate,
         max_length=args.max_length,
-        max_prompt_length=args.max_prompt_length,
         beta=args.beta,
         loss_type=args.loss_type,
         logging_steps=args.logging_steps,

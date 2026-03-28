@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CF Generation Results</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0c0e13;
+  --surface: #161921;
+  --border: #252a36;
+  --text: #d4d8e3;
+  --muted: #6b7394;
+}
+body {
+  margin: 0; padding: 28px 32px;
+  background: var(--bg); color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+}
+h1 {
+  font-family: 'Space Mono', monospace;
+  font-size: 1.4rem; margin: 0 0 4px; color: #fff;
+  letter-spacing: -0.5px;
+}
+.subtitle { font-size: 0.82rem; color: var(--muted); margin-bottom: 24px; }
+.legend-bar {
+  display: flex; gap: 18px; flex-wrap: wrap;
+  margin-bottom: 28px; padding: 10px 16px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+}
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+.dataset-section { margin-bottom: 40px; }
+.dataset-title {
+  font-family: 'Space Mono', monospace; font-size: 1.1rem;
+  color: #fff; margin: 0 0 14px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.best-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-bottom: 16px; }
+.best-table th {
+  text-align: left; font-weight: 500; color: var(--muted);
+  padding: 6px 10px; border-bottom: 1px solid var(--border);
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.5px;
+}
+.best-table td { padding: 7px 10px; border-bottom: 1px solid #1c2030; }
+.best-table tr:last-child td { border-bottom: none; }
+.best-table tr.base-row td { border-bottom: 2px dashed var(--border); font-style: italic; color: var(--muted); }
+.best-table .highlight { color: #fff; font-weight: 700; }
+.best-label {
+  display: inline-block; font-size: 0.62rem; padding: 1px 5px;
+  border-radius: 3px; font-weight: 700; margin-left: 4px;
+  background: #1a3a2a; color: #3ecf8e;
+}
+.charts-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+.chart-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px;
+}
+.chart-card h3 {
+  font-size: 0.72rem; color: var(--muted); margin: 0 0 8px;
+  text-transform: uppercase; letter-spacing: 1px;
+}
+.chart-container { position: relative; height: 210px; }
+.pending-note { font-size: 0.73rem; color: #6b7394; margin-top: 8px; font-style: italic; }
+</style>
+</head>
+<body>
+
+<h1>Counterfactual Generation &mdash; Best Results</h1>
+<p class="subtitle">Best run per method per dataset. All results use fair-base comparison with N=200 evaluation samples.</p>
+
+<div class="legend-bar">
+  <div class="legend-item"><div class="legend-dot" style="background:#5a6178"></div> Base (no tuning)</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#4f8ff7"></div> DPO</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#7c5cbf"></div> SFT</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#e8594f"></div> GRPO single</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#f5a623"></div> GRPO multi</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#3ecf8e"></div> GDPO</div>
+</div>
+
+<div id="app"></div>
+
+<script>
+const C = {
+  base: '#5a6178', dpo: '#4f8ff7', sft: '#7c5cbf',
+  grpo_s: '#e8594f', grpo_m: '#f5a623', gdpo: '#3ecf8e'
+};
+
+const datasets = {
+  'BoolQ (N=200, fair-base)': {
+    pending: '',
+    best: [
+      { method: 'Base',        dlfr: 0.0,  ned: 0.171, ppl: 12.1,  color: C.base,   note: 'LFR ≈37% · Qwen2.5-7B-Instruct' },
+      { method: 'DPO',         dlfr: 10.5, ned: 0.110, ppl: 23.9,  color: C.dpo,    note: '1p b4 2ep' },
+      { method: 'SFT',         dlfr: 1.8,  ned: 0.162, ppl: 11.6,  color: C.sft,    note: '2p b4 ml2048 200s' },
+      { method: 'GRPO single', dlfr: 0.4,  ned: 0.151, ppl: 11.7,  color: C.grpo_s, note: 'v2 g16' },
+      { method: 'GRPO multi',  dlfr: 1.7,  ned: 0.159, ppl: 12.0,  color: C.grpo_m, note: 'mv2 g16 mcl768' },
+      { method: 'GDPO',        dlfr: 1.1,  ned: 0.166, ppl: 11.8,  color: C.gdpo,   note: 'mv2 g16 ckpt200' },
+    ]
+  },
+  'SNLI-Premise (N=200, fair-base)': {
+    pending: '',
+    best: [
+      { method: 'Base',        dlfr: 0.0,  ned: 0.241, ppl: 136.2, color: C.base,   note: 'LFR ≈52% · Qwen2.5-7B-Instruct' },
+      { method: 'DPO',         dlfr: 15.7, ned: 0.301, ppl: 133.3, color: C.dpo,    note: '1p b4 2ep' },
+      { method: 'SFT',         dlfr: -1.7, ned: 0.246, ppl: 144.4, color: C.sft,    note: '1p b4 200s' },
+      { method: 'GRPO single', dlfr: 25.8, ned: 0.345, ppl: 110.6, color: C.grpo_s, note: 'v2 g16 0.5ep' },
+      { method: 'GRPO multi',  dlfr: 27.5, ned: 0.348, ppl: 72.7,  color: C.grpo_m, note: 'mv2 g16 1ep' },
+      { method: 'GDPO',        dlfr: 18.2, ned: 0.303, ppl: 145.4, color: C.gdpo,   note: 'v6 ckpt-2000 0.25ep' },
+    ]
+  },
+  'SNLI-Hypothesis (N=200, fair-base)': {
+    pending: '',
+    best: [
+      { method: 'Base',        dlfr: 0.0,  ned: 0.321, ppl: 245.4, color: C.base,   note: 'LFR ≈44% · Qwen2.5-7B-Instruct' },
+      { method: 'DPO',         dlfr: 21.0, ned: 0.378, ppl: 296.5, color: C.dpo,    note: '2p b4 2ep' },
+      { method: 'SFT',         dlfr: 1.7,  ned: 0.329, ppl: 286.8, color: C.sft,    note: '2p b4 2ep' },
+      { method: 'GRPO single', dlfr: 11.0, ned: 0.269, ppl: 317.3, color: C.grpo_s, note: 'v2 g16 1ep' },
+      { method: 'GRPO multi',  dlfr: 15.1, ned: 0.266, ppl: 702.9, color: C.grpo_m, note: 'mv2 g16 1ep' },
+      { method: 'GDPO',        dlfr: 18.7, ned: 0.361, ppl: 334.9, color: C.gdpo,   note: 'v6 ckpt-6000 0.75ep' },
+    ]
+  }
+};
+
+Chart.defaults.color = '#6b7394';
+Chart.defaults.font.family = "'DM Sans', sans-serif";
+
+const app = document.getElementById('app');
+
+Object.entries(datasets).forEach(([dsName, ds]) => {
+  const section = document.createElement('div');
+  section.className = 'dataset-section';
+
+  const title = document.createElement('h2');
+  title.className = 'dataset-title';
+  title.textContent = dsName;
+  section.appendChild(title);
+
+  const tableWrap = document.createElement('div');
+  let html = '<table class="best-table"><tr><th>Method</th><th>\u0394LFR</th><th>NED</th><th>PPL</th><th>LFR/NED</th><th>Config</th></tr>';
+  const tuned = ds.best.filter(d => d.method !== 'Base');
+  const maxDlfrTuned = Math.max(...tuned.map(d => d.dlfr));
+  ds.best.forEach(d => {
+    const isBase = d.method === 'Base';
+    const isBest = !isBase && d.dlfr === maxDlfrTuned;
+    const dlfrStr = isBase ? '—' : (d.dlfr >= 0 ? '+' : '') + d.dlfr.toFixed(1) + '%';
+    const nedStr = d.ned.toFixed(3);
+    const pplStr = d.ppl.toFixed(1);
+    const lfrNed = isBase ? '—' : ((d.dlfr / 100 + 0.5) / d.ned).toFixed(2);
+    const badge = isBest ? '<span class="best-label">BEST</span>' : '';
+    const dlfrColor = isBase ? 'var(--muted)' : (d.dlfr >= 0 ? '#3ecf8e' : '#e8594f');
+    html += `<tr class="${isBase ? 'base-row' : ''}">
+      <td><span style="color:${d.color};font-weight:600">${d.method}</span></td>
+      <td style="color:${dlfrColor}" class="${isBest ? 'highlight' : ''}">${dlfrStr}${badge}</td>
+      <td>${nedStr}</td>
+      <td>${pplStr}</td>
+      <td>${lfrNed}</td>
+      <td style="color:#6b7394;font-size:0.76rem">${d.note}</td>
+    </tr>`;
+  });
+  html += '</table>';
+  if (ds.pending) html += `<div class="pending-note">${ds.pending}</div>`;
+  tableWrap.innerHTML = html;
+  section.appendChild(tableWrap);
+
+  const row = document.createElement('div');
+  row.className = 'charts-row';
+
+  [
+    { key: 'dlfr', label: '\u0394LFR (%)', signed: true },
+    { key: 'ned',  label: 'NED (lower = better)', signed: false },
+    { key: 'ppl',  label: 'Perplexity (lower = better)', signed: false },
+  ].forEach(m => {
+    const card = document.createElement('div');
+    card.className = 'chart-card';
+    card.innerHTML = `<h3>${m.label}</h3><div class="chart-container"><canvas></canvas></div>`;
+    row.appendChild(card);
+
+    const canvas = card.querySelector('canvas');
+    const data = ds.best;
+    const values = data.map(d => d[m.key]);
+    const bgColors = data.map(d => d.color + 'AA');
+    const bdColors = data.map(d => d.color);
+
+    new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: data.map(d => d.method),
+        datasets: [{
+          data: values,
+          backgroundColor: bgColors,
+          borderColor: bdColors,
+          borderWidth: 1.5,
+          borderRadius: 4,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label(ctx) {
+                const v = ctx.raw;
+                if (m.key === 'dlfr') return (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+                return v.toFixed(m.key === 'ned' ? 3 : 1);
+              }
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: '#1c2030' },
+            ticks: { font: { size: 10 } },
+            ...(m.signed ? {} : { min: 0 })
+          },
+          y: {
+            grid: { display: false },
+            ticks: { font: { size: 10 } }
+          }
+        }
+      }
+    });
+  });
+
+  section.appendChild(row);
+  app.appendChild(section);
+});
+</script>
+</body>
+</html>

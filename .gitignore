@@ -51,6 +51,9 @@ Thumbs.db
 # Run scripts
 *.sh
 
+# Slurm output
+slurm-*.out
+
 # Weights & Biases
 wandb/
 

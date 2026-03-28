@@ -285,8 +285,9 @@ GDPO training jobs submitted for all 3 datasets (g16, 1ep, lr=5e-6). Uses the sa
 | g16 checkpoint sweep (22 evals) | Completed | v2 >> multi; early stopping essential |
 | g16 multi-reward v2 (3 models) | Completed | SNLI-P +27.5%, SNLI-H +15.1% (N=200) |
 | BoolQ low-LR (v2 + mv2) | Completed | Stable training, ΔLFR still negative |
-| GDPO g16 (3 models) | Completed | Entropy collapse at lr=5e-6; tuning in progress |
-| g24 (GRPO v2/mv2 + GDPO, 9 models) | Training | 24 generations per prompt for better group diversity |
+| GDPO g16 lr5e-6 (3 models) | Completed | Entropy collapse; SNLI-H -22.0% |
+| GDPO g16 lr1e-6 fw3 (3 models) | Completed | Collapse resolved; ΔLFR near zero (BoolQ +0.2%, SNLI-P -0.5%, SNLI-H +0.1%) |
+| g24 (9 models: GRPO v2/mv2 + GDPO) | Completed | g24 does not improve over g16; v2 g24 SNLI-H has PPL collapse (9651) |
 
 ## 12. Reward Formula Correction
 
@@ -296,10 +297,170 @@ The reward correction proved transformative: v2 results on SNLI-P (+25.8% at N=2
 
 ## 13. N=200 Re-Evaluation
 
-All best models were re-evaluated at N=200 (up from N=100) for more reliable comparisons. Key observations:
+All best models re-evaluated at N=200 (up from N=100) for more reliable comparisons. All 13 N=200 evaluations completed.
 
-- **GRPO mv2 remains the best overall method**: SNLI-P +27.5%, SNLI-H +15.1%
-- **SNLI-H mv2 improved at N=200**: +15.1% vs +11.5% at N=100, confirming the gated confidence benefit
+- **GRPO mv2 remains the best overall method**: SNLI-P +27.5%, SNLI-H +15.1%, BoolQ +1.2%
+- **All BoolQ GRPO variants positive at N=200**: v2 +0.4%, mv2 +1.2%, mv2 lr1e6 +1.1%. Base LFR at N=100 was ~43% vs ~37% at N=200, explaining the apparent poor performance at N=100
+- **BoolQ SFT neutral at N=200**: ΔLFR -0.0% (was +4.1% at N=100 with 200step config)
+- **BoolQ GRPO v2 has best LFR/NED**: 2.49, indicating very targeted edits (lowest NED of 0.151)
 - **DPO SNLI-H improved substantially**: +21.0% (N=200) vs +7.5% (N=100), indicating high evaluation variance on this dataset at N=100
-- **LFR/NED efficiency metric** added: GRPO mv2 achieves LFR/NED of 2.29 (SNLI-P) and 2.23 (SNLI-H), compared to base model's ~2.16 and ~1.38 respectively
-- BoolQ N=200 results pending
+- **LFR/NED efficiency metric** added to evaluation pipeline
+
+## 14. GDPO lr1e-6 Results
+
+GDPO lr1e-6 with FormatReward weight 3x resolved the entropy collapse seen at lr5e-6 but ΔLFR remains near zero:
+
+| Dataset | ΔLFR (lr5e-6) | ΔLFR (lr1e-6) | NED | PPL |
+|---------|:--:|:--:|:---:|:---:|
+| BoolQ | +1.1% | +0.2% | 0.153 | 11.6 |
+| SNLI-P | +2.5% | -0.5% | 0.244 | 134.5 |
+| SNLI-H | -22.0% | +0.1% | 0.307 | 283.8 |
+
+The per-reward normalization amplifies noise when individual reward variance is low within a group. Larger group sizes (g24) provide marginal improvement on SNLI but the fundamental issue remains.
+
+## 15. g24 Results (24 Generations per Prompt)
+
+All 9 g24 training jobs completed (8 required checkpoint resume after 24h timeout). Full comparison with g16:
+
+### g24 vs g16: ΔLFR Comparison
+
+| Dataset | GRPO v2 g16 | GRPO v2 g24 | GRPO mv2 g16 | GRPO mv2 g24 | GDPO g16 lr1e6 | GDPO g24 lr1e6 |
+|---------|:-----------:|:-----------:|:------------:|:------------:|:--------------:|:--------------:|
+| BoolQ | +0.4% | +0.2% | **+1.2%** | -0.6% | +0.2% | -0.6% |
+| SNLI-P | **+25.8%** | +8.6% | **+27.5%** | +22.2% | -0.5% | +1.1% |
+| SNLI-H | +11.0% | +22.6% ⚠ | **+15.1%** | +12.6% | +0.1% | +1.1% |
+
+⚠ GRPO v2 g24 SNLI-H has catastrophic PPL (9651), indicating incoherent text that happens to flip labels.
+
+### Key Observations
+
+1. **g24 does not improve over g16 for GRPO**: On SNLI-P, both v2 and mv2 g24 are substantially worse than g16. The best SNLI-P method remains mv2 g16 (+27.5% vs g24's +22.2%). On BoolQ, g24 is consistently slightly worse.
+
+2. **PPL degradation at g24**: GRPO v2 g24 shows extreme perplexity on SNLI (769.8 on SNLI-P, 9651 on SNLI-H), much worse than v2 g16 (110.6 and 317.3). The larger group may be encouraging the model to exploit reward artifacts at the expense of fluency. GRPO mv2 g24 shows less PPL degradation (146.6 and 453.2), suggesting the format reward provides some regularization.
+
+3. **GDPO g24 marginal improvement**: GDPO g24 shows +1.1% on both SNLI datasets, up from near-zero at g16. The larger group size helps GDPO's per-reward normalization slightly, but the improvement is too small to be practically significant.
+
+4. **Training efficiency**: g24 takes ~50% longer per step than g16 (24 vs 16 completions per prompt). SNLI datasets require 24000 optimizer steps at g24 vs 16000 at g16, exceeding the 24h SLURM limit. Added `--resume_from_checkpoint` support to handle this.
+
+### Conclusion
+
+Increasing group size from 16 to 24 does not improve results and often degrades them. The additional computational cost (~2x for SNLI) is not justified. The g16 configuration remains optimal for all methods.
+
+---
+
+## 16. Root Cause Analysis: Why GDPO Underperforms
+
+### Diagnosis
+
+Examined actual GDPO counterfactual outputs from SNLI-Premise evaluation (N=200):
+
+| Metric | GDPO Tuned | GRPO mv2 Tuned | Base |
+|--------|:----------:|:--------------:|:----:|
+| LFR | 51.4% | **79.7%** | ~52% |
+| NED | 0.244 | 0.348 | 0.241 |
+| PPL | 134.5 | **72.7** | 136.2 |
+| Zero edits | 44 | 7 | — |
+
+GDPO produces 6x more zero-edits than GRPO, with no LFR improvement over base.
+
+### Root cause: Similarity reward dominates when flip signal is sparse
+
+When no generations in a group flip the label (common early in training and on harder prompts):
+- FlipReward = 0 for all generations → zero variance → zero advantage
+- GatedConfidenceReward = 0 for all → zero variance → zero advantage
+- SimilarityReward = high for all (model copies original) → non-zero variance → drives gradient
+- FormatReward = 1 for all → zero variance → zero advantage
+
+Result: only SimilarityReward contributes. Per-reward normalization amplifies it. The model learns "change as little as possible" which is the opposite of what's needed for label flips.
+
+### Training log evidence
+
+From GDPO SNLI-H logs:
+- Entropy: 0.24 → 0.006 (severe collapse)
+- Many batches: `flip_reward=0`, `gated_confidence=0` — only similarity drives learning
+- `frac_reward_zero_std=1` in some steps — zero variance in all rewards within groups
+
+### Gaps between our implementation and the GDPO paper
+
+| Aspect | GDPO Paper | Our Previous Implementation |
+|--------|-----------|---------------------------|
+| KL penalty | kl_coef=0.0005-0.001 | beta=0.0 (none) |
+| Conditioned rewards | Yes (gate easy on hard) | No |
+| Dynamic sampling | filter_groups.enable=True | No |
+| Clipping | clip_low=0.2, clip_high=0.28 | epsilon=0.2 (symmetric) |
+| Batch size | 512 | ~4 prompts (64 samples) |
+
+---
+
+## 17. Root Cause Analysis: Why BoolQ Struggles
+
+### Diagnosis
+
+Examined actual BoolQ counterfactual outputs across methods:
+
+**Passage length**: BoolQ passages average 562 chars (up to 3310 chars), ~8x longer than SNLI (avg 71 chars). This is the fundamental challenge.
+
+**Wrong edit targets**: Many edits change parts of the passage that don't answer the question. Example: question "is here comes the sun a Beatles song?", edits change "best-known compositions" instead of the part identifying it as a Beatles song.
+
+**Format collapse**: Model generates max-length text (512 tokens) without valid `<edit>` tags. This happens because BoolQ outputs are 130-300 tokens (vs SNLI's 11-40 tokens), and longer outputs have more opportunity for structural drift.
+
+**DPO succeeds where GRPO fails**: DPO achieves +14.6% ΔLFR on BoolQ, proving the task is learnable with supervised signal. GRPO's struggle is a reward/exploration issue, not a fundamental task limitation.
+
+### max_completion_length bottleneck
+
+- `max_completion_length=512` tokens
+- BoolQ passages: up to ~827 tokens
+- Model must output full edited passage in `<edit>...</edit>` tags
+- Truncation at 512 tokens cuts off the closing `</edit>` tag → format failure → zero reward → no learning signal
+
+---
+
+## 18. GDPO and BoolQ Improvements (Phase 1+2)
+
+### 18.1 Conditioned Rewards (GDPO paper Sec 4.2)
+
+**Problem**: SimilarityReward provides strong gradient signal even when no label flip occurs, pulling the model toward minimal edits.
+
+**Solution**: Created `ConditionedSimilarityReward` — returns cosine similarity only when FlipReward=1. When the label doesn't flip, returns 0.0 instead of the similarity score. This mirrors the GDPO paper's `R_tilde_length` which requires `R_correct=1`.
+
+**Design decision**: Only SimilarityReward is conditioned. GatedConfidenceReward is already gated on flip by design. FormatReward remains unconditional (it provides independent normalization signal for format compliance).
+
+Implementation: `ConditionedSimilarityReward` class in `train_grpo.py`, enabled via `--conditioned_rewards` flag in `train_gdpo.py`.
+
+### 18.2 KL Penalty
+
+**Problem**: `beta=0.0` allows unconstrained policy drift → entropy collapse (0.24 → 0.006).
+
+**Solution**: Changed GDPO default `beta` from `0.0` to `0.001` (paper uses 0.0005-0.001).
+
+This adds a soft constraint keeping the policy close to the reference model, preventing the deterministic collapse observed in training logs.
+
+### 18.3 Dynamic Sampling (Zero-Variance Group Filtering)
+
+**Problem**: When all generations in a group have the same rewards (e.g., all fail to flip), group_std=0, advantages ≈ 0. These groups waste training steps with no learning signal.
+
+**Solution**: In `gdpo_trainer.py`, detect groups where the combined weighted advantage has zero variance (`var < 1e-8`). Set those groups' advantages to exactly 0.0, preventing them from corrupting the batch-level normalization.
+
+Inspired by DAPO's `filter_groups.enable=TRUE` used in the GDPO paper. Logs `zero_var_groups=N/M` to track how many groups are filtered.
+
+### 18.4 Increased max_completion_length for BoolQ
+
+**Problem**: BoolQ passages up to 3310 chars (~827 tokens) truncated at 512 tokens → format collapse.
+
+**Solution**: `MAX_COMPLETION_LENGTH` env var in `run_grpo.sh` and `run_gdpo.sh`. Default remains 512 (backward compatible); BoolQ runs use 768.
+
+### 18.5 Configurable Batch Size
+
+**Problem**: GDPO paper uses train_batch_size=512; our effective batch was 4 prompts (64 samples). Batch-level normalization (step 3 of GDPO) is noisy with few samples.
+
+**Solution**: `GRAD_ACCUM_STEPS` env var in `run_gdpo.sh`. Default 4 (backward compatible); experiments will test 8 and 16 for more stable batch normalization.
+
+### 18.6 SFT Warm-Start for BoolQ
+
+**Problem**: GRPO on BoolQ starts from a base model with poor format compliance for long passages.
+
+**Solution**: `extract_sft_data.py` script that extracts successful counterfactuals from DPO evaluation output (those that flipped labels with low NED), formats them for SFT training. The resulting SFT checkpoint serves as the starting point for GRPO/GDPO, giving the model initial format compliance and edit quality.
+
+### Expected impact
+
+The conditioned rewards + KL penalty address GDPO's core failure mode (similarity domination + entropy collapse). If GDPO's per-reward normalization works as designed (better signal preservation), these fixes should bring GDPO performance close to or above standard GRPO on SNLI. For BoolQ, increased completion length addresses the mechanical bottleneck, and SFT warm-start provides the supervised initialization that DPO's success suggests is necessary.
