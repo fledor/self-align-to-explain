@@ -230,19 +230,22 @@ def construct_pairs_for_entry(
     
     pairs = []
     
-    # 1-to-1 pairing: best↔worst, 2nd-best↔2nd-worst
-    num_pairs = min(max_pairs, len(chosen_ranked), len(rejected_ranked))
-    
-    for i in range(num_pairs):
+    for i in range(min(max_pairs, len(chosen_ranked))):
         chosen_cf = chosen_ranked[i]   # i-th best (must have flipped)
-        rejected_cf = rejected_ranked[i]  # i-th worst
+        target = chosen_cf["target_label"]
         
-        # Skip if chosen and rejected are the same CF
-        if chosen_cf.get("edited_text") == rejected_cf.get("edited_text"):
+        # Filter rejected pool to same target label so the DPO pair is
+        # coherent with the prompt (avoids confounding when SNLI has 3 labels).
+        rejected_same_target = [
+            cf for cf in rejected_ranked
+            if cf["target_label"] == target
+            and cf.get("edited_text") != chosen_cf.get("edited_text")
+        ]
+        if not rejected_same_target:
             continue
+        rejected_cf = rejected_same_target[0]  # worst CF for same target
         
-        # Use the target label from the chosen example for the prompt
-        prompt = format_prompt_for_dpo(entry, chosen_cf["target_label"], tokenizer)
+        prompt = format_prompt_for_dpo(entry, target, tokenizer)
         
         # Build minimal pair for dpo_pairs.jsonl (debugging/analysis)
         pair = {

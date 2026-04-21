@@ -18,11 +18,13 @@ Metrics:
 
 import argparse
 import json
+import math
 import random
 from pathlib import Path
 from typing import Optional
 
 import torch
+import torch.nn.functional as F
 import Levenshtein
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -31,7 +33,14 @@ from peft import PeftModel
 from config import Config
 from dataset_registry import get_dataset, list_datasets
 from prompts import get_generation_prompt, get_verification_prompt, format_chat_messages
-from utils import parse_edit_tag, save_json, save_jsonl, load_jsonl, normalize_label
+from utils import (
+    json_dumps_strict,
+    parse_edit_tag,
+    save_json,
+    save_jsonl,
+    load_jsonl,
+    normalize_label,
+)
 
 
 def get_parser() -> argparse.ArgumentParser:
@@ -328,19 +337,43 @@ def compute_perplexity(
     model,
     tokenizer,
     text: str,
-) -> float:
+) -> Optional[float]:
     """
     Compute perplexity of a text under the model.
-    
+
     Lower perplexity = model finds the text more likely/natural.
+    Uses float32 cross-entropy on logits (more stable than bf16 loss on OOD
+    short strings). Returns None if tokenized length is below 2 (no shifted
+    labels, so CE is undefined) or loss/PPL is non-finite.
     """
-    inputs = tokenizer(text, return_tensors="pt").to(model.device)
-    
+    text = (text or "").strip()
+
+    inputs = tokenizer(
+        text,
+        return_tensors="pt",
+        truncation=True,
+        max_length=1024,
+    ).to(model.device)
+    if inputs["input_ids"].size(-1) < 2:
+        return None
+
     with torch.no_grad():
-        outputs = model(**inputs, labels=inputs["input_ids"])
-        loss = outputs.loss
-    
-    perplexity = torch.exp(loss).item()
+        outputs = model(**inputs)
+
+    logits = outputs.logits.float()
+    shift_logits = logits[:, :-1, :].contiguous()
+    shift_labels = inputs["input_ids"][:, 1:].contiguous()
+    loss = F.cross_entropy(
+        shift_logits.view(-1, shift_logits.size(-1)),
+        shift_labels.view(-1),
+        reduction="mean",
+    )
+
+    if not torch.isfinite(loss).all():
+        return None
+    perplexity = float(torch.exp(loss).item())
+    if not math.isfinite(perplexity):
+        return None
     return perplexity
 
 
@@ -417,7 +450,6 @@ def generate_counterfactuals_for_model(
             for i in range(cfs_per_entry):
                 target_label = target_labels[i % len(target_labels)]
                 
-                # Generate counterfactual
                 system_prompt, user_prompt = get_generation_prompt(
                     dataset_name=dataset_name,
                     entry=formatted,
@@ -432,13 +464,13 @@ def generate_counterfactuals_for_model(
                 if edited_text is not None and edited_text not in seen_texts:
                     seen_texts.add(edited_text)
                     
-                    # Compute edit distance
                     edit_metrics = compute_edit_distance(original_text, edited_text)
                     
-                    # Compute perplexity
                     try:
                         ppl = compute_perplexity(model, tokenizer, edited_text)
                     except Exception:
+                        ppl = None
+                    if ppl is not None and not math.isfinite(ppl):
                         ppl = None
                     
                     entry_cfs.append({
@@ -461,7 +493,7 @@ def generate_counterfactuals_for_model(
             
             # Progressive save
             with open(progress_file, "a") as f:
-                f.write(json.dumps(entry_result) + "\n")
+                f.write(json_dumps_strict(entry_result, ensure_ascii=False) + "\n")
     
     return results
 
@@ -594,8 +626,9 @@ def compute_metrics(cf_results: dict[str, list[dict]]) -> dict:
                 total_edit_dist += cf.get("levenshtein_abs", 0)
                 total_norm_edit_dist += cf.get("levenshtein_norm", 0)
                 
-                if cf.get("perplexity") is not None:
-                    total_ppl += cf["perplexity"]
+                p = cf.get("perplexity")
+                if p is not None and isinstance(p, (int, float)) and math.isfinite(p):
+                    total_ppl += p
                     ppl_count += 1
         
         lfr = flipped_cfs / total_cfs if total_cfs > 0 else 0
@@ -606,7 +639,8 @@ def compute_metrics(cf_results: dict[str, list[dict]]) -> dict:
             "label_flip_rate": lfr,
             "avg_edit_distance": total_edit_dist / total_cfs if total_cfs > 0 else 0,
             "avg_norm_edit_distance": ned,
-            "avg_perplexity": total_ppl / ppl_count if ppl_count > 0 else 0,
+            "avg_perplexity": (total_ppl / ppl_count) if ppl_count > 0 else None,
+            "ppl_valid_count": ppl_count,
             "lfr_per_ned": lfr / ned if ned > 0 else 0,
         }
     
@@ -640,19 +674,24 @@ def generate_report(base_metrics: dict, tuned_metrics: dict, base_eval_dir: str 
     
     all_datasets = set(base_metrics.keys()) | set(tuned_metrics.keys())
     
+    def _fmt_ppl(v) -> str:
+        if v is None or not isinstance(v, (int, float)) or not math.isfinite(v):
+            return "—"
+        return f"{v:.1f}"
+
     for dataset_name in sorted(all_datasets):
         if dataset_name in base_metrics:
             s = base_metrics[dataset_name]
             report_lines.append(
                 f"| {dataset_name} | Base | {s['label_flip_rate']:.1%} | "
-                f"{s['avg_edit_distance']:.1f} | {s['avg_norm_edit_distance']:.3f} | {s['avg_perplexity']:.1f} | {s['lfr_per_ned']:.2f} |"
+                f"{s['avg_edit_distance']:.1f} | {s['avg_norm_edit_distance']:.3f} | {_fmt_ppl(s.get('avg_perplexity'))} | {s['lfr_per_ned']:.2f} |"
             )
         
         if dataset_name in tuned_metrics:
             s = tuned_metrics[dataset_name]
             report_lines.append(
                 f"| {dataset_name} | Tuned | {s['label_flip_rate']:.1%} | "
-                f"{s['avg_edit_distance']:.1f} | {s['avg_norm_edit_distance']:.3f} | {s['avg_perplexity']:.1f} | {s['lfr_per_ned']:.2f} |"
+                f"{s['avg_edit_distance']:.1f} | {s['avg_norm_edit_distance']:.3f} | {_fmt_ppl(s.get('avg_perplexity'))} | {s['lfr_per_ned']:.2f} |"
             )
     
     report_lines.extend([
@@ -771,10 +810,14 @@ def main():
             base_cf_results[ds_name].append(entry_result)
         print(f"  Loaded base CFs for {list(base_cf_results.keys())}")
         
-        # Copy files to new output dir for reference
+        # Copy files to new output dir for reference (skip if already the same file)
         import shutil
-        shutil.copy(orig_pred_file, output_dir / "original_predictions.json")
-        shutil.copy(base_cfs_file, output_dir / "base_cfs_progress.jsonl")
+        dst_pred = output_dir / "original_predictions.json"
+        dst_cfs  = output_dir / "base_cfs_progress.jsonl"
+        if orig_pred_file.resolve() != dst_pred.resolve():
+            shutil.copy(orig_pred_file, dst_pred)
+        if base_cfs_file.resolve() != dst_cfs.resolve():
+            shutil.copy(base_cfs_file, dst_cfs)
     else:
         # Step 1: Compute original predictions (base model on unedited inputs)
         print("\n" + "=" * 60)

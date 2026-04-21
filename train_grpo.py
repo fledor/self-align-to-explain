@@ -271,7 +271,7 @@ class CounterfactualReward:
                 rewards.append(0.0)
             else:
                 flip_bonus = 1.0 if flip_results.get(i, False) else 0.0
-                confidence = confidence_results.get(i, 0.5)
+                confidence = confidence_results.get(i, 0.0)
                 similarity = similarity_results.get(i, 0.0)
                 reward = flip_bonus + confidence * similarity
                 rewards.append(reward)
@@ -338,7 +338,7 @@ class CounterfactualReward:
         label = self.dataset_obj.parse_label_from_response(response)
         confidence = parse_confidence(response)
         if confidence is None:
-            confidence = 0.5
+            confidence = 0.0
         return label, confidence
 
     def _compute_similarity(self, original_text: str, edited_text: str) -> float:
@@ -370,7 +370,7 @@ class PredictionCache:
         self._cache[idx] = (flipped, confidence)
 
     def get(self, idx: int) -> tuple[bool, float]:
-        return self._cache.get(idx, (False, 0.5))
+        return self._cache.get(idx, (False, 0.0))
 
     def clear(self):
         self._cache.clear()
@@ -658,7 +658,7 @@ def _predict_label(model, tokenizer, dataset_name, dataset_obj, verification_inp
     label = dataset_obj.parse_label_from_response(response)
     confidence = parse_confidence(response)
     if confidence is None:
-        confidence = 0.5
+        confidence = 0.0
     return label, confidence
 
 

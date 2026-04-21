@@ -5,9 +5,28 @@ Includes JSON I/O, edit tag parsing, and other helper functions.
 """
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Optional
+
+
+def sanitize_for_json(obj: Any) -> Any:
+    """Replace NaN/Inf with None so dumps are strict JSON (RFC-compliant)."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_for_json(v) for v in obj]
+    return obj
+
+
+def json_dumps_strict(obj: Any, **kwargs) -> str:
+    """json.dumps with allow_nan=False after sanitizing non-finite floats."""
+    return json.dumps(sanitize_for_json(obj), allow_nan=False, **kwargs)
 
 
 def save_json(data: Any, filepath: str, indent: int = 2) -> None:
@@ -23,7 +42,13 @@ def save_json(data: Any, filepath: str, indent: int = 2) -> None:
     filepath.parent.mkdir(parents=True, exist_ok=True)
     
     with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=indent, ensure_ascii=False)
+        json.dump(
+            sanitize_for_json(data),
+            f,
+            indent=indent,
+            ensure_ascii=False,
+            allow_nan=False,
+        )
 
 
 def load_json(filepath: str) -> Any:
@@ -53,7 +78,7 @@ def save_jsonl(data: list, filepath: str) -> None:
     
     with open(filepath, "w", encoding="utf-8") as f:
         for item in data:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+            f.write(json_dumps_strict(item, ensure_ascii=False) + "\n")
 
 
 def load_jsonl(filepath: str) -> list:
@@ -87,7 +112,7 @@ def append_jsonl(item: dict, filepath: str) -> None:
     filepath.parent.mkdir(parents=True, exist_ok=True)
     
     with open(filepath, "a", encoding="utf-8") as f:
-        f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        f.write(json_dumps_strict(item, ensure_ascii=False) + "\n")
 
 
 def parse_edit_tag(response: str) -> Optional[str]:
