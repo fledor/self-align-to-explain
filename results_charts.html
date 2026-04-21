@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CF Generation Results</title>
+<title>CF Generation — Best Results</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
@@ -24,7 +24,12 @@ h1 {
   font-size: 1.4rem; margin: 0 0 4px; color: #fff;
   letter-spacing: -0.5px;
 }
-.subtitle { font-size: 0.82rem; color: var(--muted); margin-bottom: 24px; }
+.subtitle { font-size: 0.82rem; color: var(--muted); margin-bottom: 12px; }
+.model-toc {
+  font-size: 0.82rem; color: var(--muted); margin-bottom: 24px;
+}
+.model-toc a { color: #4f8ff7; text-decoration: none; }
+.model-toc a:hover { text-decoration: underline; }
 .legend-bar {
   display: flex; gap: 18px; flex-wrap: wrap;
   margin-bottom: 28px; padding: 10px 16px;
@@ -32,10 +37,32 @@ h1 {
 }
 .legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); }
 .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+.model-section {
+  margin-bottom: 48px;
+  padding-top: 28px;
+  border-top: 1px solid var(--border);
+}
+.model-section:first-of-type {
+  padding-top: 0;
+  border-top: none;
+}
+.model-heading {
+  font-family: 'Space Mono', monospace;
+  font-size: 1.2rem;
+  color: #fff;
+  margin: 0 0 20px;
+  letter-spacing: -0.3px;
+}
+.model-placeholder {
+  font-size: 0.88rem;
+  color: var(--muted);
+  line-height: 1.5;
+  max-width: 52rem;
+}
 .dataset-section { margin-bottom: 40px; }
 .dataset-title {
-  font-family: 'Space Mono', monospace; font-size: 1.1rem;
-  color: #fff; margin: 0 0 14px;
+  font-family: 'Space Mono', monospace; font-size: 1.05rem;
+  color: #e8eaf0; margin: 0 0 14px;
   padding-bottom: 8px; border-bottom: 1px solid var(--border);
 }
 .best-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; margin-bottom: 16px; }
@@ -53,27 +80,69 @@ h1 {
   border-radius: 3px; font-weight: 700; margin-left: 4px;
   background: #1a3a2a; color: #3ecf8e;
 }
-.charts-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+.charts-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+@media (max-width: 1100px) {
+  .charts-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .charts-row { grid-template-columns: 1fr; }
+}
 .chart-card {
   background: var(--surface); border: 1px solid var(--border);
-  border-radius: 10px; padding: 14px;
+  border-radius: 10px; padding: 10px 12px;
 }
 .chart-card h3 {
-  font-size: 0.72rem; color: var(--muted); margin: 0 0 8px;
-  text-transform: uppercase; letter-spacing: 1px;
+  font-size: 0.68rem; color: var(--muted); margin: 0 0 6px;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  line-height: 1.25;
 }
-.chart-container { position: relative; height: 210px; }
+.chart-container { position: relative; height: 168px; }
 .pending-note { font-size: 0.73rem; color: #6b7394; margin-top: 8px; font-style: italic; }
+.compare-block {
+  margin-bottom: 36px;
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--border);
+}
+.compare-block .compare-lead {
+  font-size: 0.82rem; color: var(--muted); margin: 0 0 18px;
+  max-width: 56rem; line-height: 1.45;
+}
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.compare-grid:last-child { margin-bottom: 0; }
+.compare-row-label {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 8px;
+}
+@media (max-width: 1000px) {
+  .compare-grid { grid-template-columns: 1fr; }
+}
+.chart-container.compare-chart { height: 260px; }
+.chart-container.compare-chart-sm { height: 220px; }
 </style>
 </head>
 <body>
 
 <h1>Counterfactual Generation &mdash; Best Results</h1>
-<p class="subtitle">Best run per method per dataset. All results use fair-base comparison with N=200 evaluation samples.</p>
+<p class="subtitle">7B: best &Delta;LFR <strong>per method</strong> on fair N=200 in <a href="RESULTS.md">RESULTS.md</a>, using tuned runs with <strong>mean PPL &lt; 650</strong> (drops e.g. SimPO SNLI-H grid-best +29.7% @ PPL 1202 in favour of v2fix +29.4% @ PPL 617; drops <code>simpo_qual</code> +32.1% @ ~4.4k PPL, GRPO v2 g24 +22.6% @ ~9.6k PPL — full table in RESULTS). 14B: complete (5 methods × 3 datasets); GRPO single training. 3B: SNLI-P/H DPO/SimPO/SFT/GDPO done; GRPO multi/single evals pending; BoolQ DPO +0.0%, others queued; GDPO 5ep retraining. KTO 7B training. SimPO SNLI-H 3B PPL=2672 excluded.</p>
+<p class="model-toc">Jump to: <a href="#cross-model">Cross-model</a> &middot; <a href="#qwen25-7b">Qwen2.5-7B-Instruct</a> &middot; <a href="#qwen25-14b">Qwen2.5-14B-Instruct</a> &middot; <a href="#qwen25-3b">Qwen2.5-3B-Instruct</a></p>
 
 <div class="legend-bar">
   <div class="legend-item"><div class="legend-dot" style="background:#5a6178"></div> Base (no tuning)</div>
   <div class="legend-item"><div class="legend-dot" style="background:#4f8ff7"></div> DPO</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#2dd4bf"></div> SimPO</div>
   <div class="legend-item"><div class="legend-dot" style="background:#7c5cbf"></div> SFT</div>
   <div class="legend-item"><div class="legend-dot" style="background:#e8594f"></div> GRPO single</div>
   <div class="legend-item"><div class="legend-dot" style="background:#f5a623"></div> GRPO multi</div>
@@ -84,56 +153,350 @@ h1 {
 
 <script>
 const C = {
-  base: '#5a6178', dpo: '#4f8ff7', sft: '#7c5cbf',
-  grpo_s: '#e8594f', grpo_m: '#f5a623', gdpo: '#3ecf8e'
+  base: '#5a6178', dpo: '#4f8ff7', simpo: '#2dd4bf', sft: '#7c5cbf',
+  grpo_s: '#e8594f', grpo_m: '#f5a623', gdpo: '#3ecf8e', kto: '#f97316'
 };
 
-const datasets = {
-  'BoolQ (N=200, fair-base)': {
-    pending: '',
-    best: [
-      { method: 'Base',        dlfr: 0.0,  ned: 0.171, ppl: 12.1,  color: C.base,   note: 'LFR ≈37% · Qwen2.5-7B-Instruct' },
-      { method: 'DPO',         dlfr: 10.5, ned: 0.110, ppl: 23.9,  color: C.dpo,    note: '1p b4 2ep' },
-      { method: 'SFT',         dlfr: 1.8,  ned: 0.162, ppl: 11.6,  color: C.sft,    note: '2p b4 ml2048 200s' },
-      { method: 'GRPO single', dlfr: 0.4,  ned: 0.151, ppl: 11.7,  color: C.grpo_s, note: 'v2 g16' },
-      { method: 'GRPO multi',  dlfr: 1.7,  ned: 0.159, ppl: 12.0,  color: C.grpo_m, note: 'mv2 g16 mcl768' },
-      { method: 'GDPO',        dlfr: 1.1,  ned: 0.166, ppl: 11.8,  color: C.gdpo,   note: 'mv2 g16 ckpt200' },
-    ]
+const METHOD_SERIES = [
+  { method: 'Base',        color: C.base },
+  { method: 'DPO',         color: C.dpo },
+  { method: 'SimPO',       color: C.simpo },
+  { method: 'SFT',         color: C.sft },
+  { method: 'GRPO single', color: C.grpo_s },
+  { method: 'GRPO multi',  color: C.grpo_m },
+  { method: 'GDPO',        color: C.gdpo },
+  { method: 'KTO',         color: C.kto },
+];
+
+const DATASET_ORDER = [
+  'BoolQ (N=200, fair-base)',
+  'SNLI-Premise (N=200, fair-base)',
+  'SNLI-Hypothesis (N=200, fair-base)',
+];
+
+const models = [
+  {
+    id: 'qwen25-7b',
+    displayName: 'Qwen2.5-7B-Instruct',
+    sortKey: 7,
+    compareShortLabel: 'Qwen-7B',
+    datasets: {
+      'BoolQ (N=200, fair-base)': {
+        baseLfr: 0.372,
+        pending: '',
+        best: [
+          { method: 'Base',        dlfr: 0.0,  ned: 0.171, ppl: 12.1,  color: C.base,   note: '37.2% LFR · grpo_mv2 CF export' },
+          { method: 'DPO',         dlfr: 10.5, ned: 0.110, ppl: 23.9,  color: C.dpo,    note: '1p b4 2ep sigmoid (48.0% LFR)' },
+          { method: 'SimPO',       dlfr: 21.8, ned: 0.167, ppl: 12.5,  color: C.simpo,  note: '2p b4 β3γ0.5 (59.0% LFR)' },
+          { method: 'SFT',         dlfr: 1.8,  ned: 0.162, ppl: 11.6,  color: C.sft,    note: '2p b4 ml2048 200step (38.4% LFR)' },
+          { method: 'GRPO single', dlfr: 0.4,  ned: 0.151, ppl: 11.7,  color: C.grpo_s, note: 'v2 g16 ~0.11ep (37.7% LFR)' },
+          { method: 'GRPO multi',  dlfr: 1.7,  ned: 0.159, ppl: 12.0,  color: C.grpo_m, note: 'mv2 g16 mcl768 ~0.25ep (38.2% LFR)' },
+          { method: 'GDPO',        dlfr: 1.1,  ned: 0.166, ppl: 11.8,  color: C.gdpo,   note: 'mv2 g16 ckpt200 (37.7% LFR)' },
+        ]
+      },
+      'SNLI-Premise (N=200, fair-base)': {
+        baseLfr: 0.522,
+        pending: '',
+        best: [
+          { method: 'Base',        dlfr: 0.0,  ned: 0.241, ppl: 136.2, color: C.base,   note: '52.2% LFR · fair N=200' },
+          { method: 'DPO',         dlfr: 15.7, ned: 0.301, ppl: 133.3, color: C.dpo,    note: '1p b4 2ep (68.0% LFR)' },
+          { method: 'SimPO',       dlfr: 30.5, ned: 0.346, ppl: 157.6, color: C.simpo,  note: '2p b4 simpo v2fix (83.4% LFR; v2fix preference data)' },
+          { method: 'SFT',         dlfr: 0.9,  ned: 0.250, ppl: 130.5, color: C.sft,    note: '2p b16 1ep (53.2% LFR; fair grid)' },
+          { method: 'GRPO single', dlfr: 25.8, ned: 0.345, ppl: 110.6, color: C.grpo_s, note: 'v2 g16 0.5ep' },
+          { method: 'GRPO multi',  dlfr: 29.1, ned: 0.336, ppl: 92.9,  color: C.grpo_m, note: 'mv2 g16 v2fix 1ep' },
+          { method: 'GDPO',        dlfr: 18.2, ned: 0.303, ppl: 145.4, color: C.gdpo,   note: 'v6 ckpt-2000 0.25ep' },
+        ]
+      },
+      'SNLI-Hypothesis (N=200, fair-base)': {
+        baseLfr: 0.443,
+        pending: 'PPL cap ~650: β3γ0.5 grid best (+29.7%, PPL 1202) excluded; v2fix (+29.4%, PPL 617) shown instead. <code>simpo_qual</code> +32.1% @ PPL 4.4k excluded.',
+        best: [
+          { method: 'Base',        dlfr: 0.0,  ned: 0.321, ppl: 245.4, color: C.base,   note: '44.3% LFR · fair N=200' },
+          { method: 'DPO',         dlfr: 21.0, ned: 0.378, ppl: 296.5, color: C.dpo,    note: '2p b4 2ep' },
+          { method: 'SimPO',       dlfr: 29.4, ned: 0.390, ppl: 617.1, color: C.simpo,  note: '2p b4 β3γ0.5 v2fix (73.6% LFR; grid-best +29.7% @ PPL 1202 in RESULTS)' },
+          { method: 'SFT',         dlfr: 1.7,  ned: 0.329, ppl: 286.8, color: C.sft,    note: '2p b4 2ep' },
+          { method: 'GRPO single', dlfr: 11.0, ned: 0.269, ppl: 317.3, color: C.grpo_s, note: 'v2 g16 1ep' },
+          { method: 'GRPO multi',  dlfr: 22.6, ned: 0.358, ppl: 508.3, color: C.grpo_m, note: 'mv2 g16 v2fix 1ep' },
+          { method: 'GDPO',        dlfr: 18.7, ned: 0.361, ppl: 334.9, color: C.gdpo,   note: 'v6 ckpt-6000 0.75ep' },
+        ]
+      }
+    }
   },
-  'SNLI-Premise (N=200, fair-base)': {
-    pending: '',
-    best: [
-      { method: 'Base',        dlfr: 0.0,  ned: 0.241, ppl: 136.2, color: C.base,   note: 'LFR ≈52% · Qwen2.5-7B-Instruct' },
-      { method: 'DPO',         dlfr: 15.7, ned: 0.301, ppl: 133.3, color: C.dpo,    note: '1p b4 2ep' },
-      { method: 'SFT',         dlfr: -1.7, ned: 0.246, ppl: 144.4, color: C.sft,    note: '1p b4 200s' },
-      { method: 'GRPO single', dlfr: 25.8, ned: 0.345, ppl: 110.6, color: C.grpo_s, note: 'v2 g16 0.5ep' },
-      { method: 'GRPO multi',  dlfr: 27.5, ned: 0.348, ppl: 72.7,  color: C.grpo_m, note: 'mv2 g16 1ep' },
-      { method: 'GDPO',        dlfr: 18.2, ned: 0.303, ppl: 145.4, color: C.gdpo,   note: 'v6 ckpt-2000 0.25ep' },
-    ]
+  {
+    id: 'qwen25-14b',
+    displayName: 'Qwen2.5-14B-Instruct',
+    sortKey: 14,
+    compareShortLabel: 'Qwen-14B',
+    datasets: {
+      'BoolQ (N=200, fair-base)': {
+        baseLfr: 0.549,
+        pending: '',
+        best: [
+          { method: 'Base',        dlfr: 0.0,  ned: 0.297, ppl: 8.8,   color: C.base,   note: '~54.9% LFR · anchor base_metrics' },
+          { method: 'DPO',         dlfr: 0.3,  ned: 0.268, ppl: 8.4,   color: C.dpo,    note: '1p b4 2ep (55.2% LFR)' },
+          { method: 'SimPO',       dlfr: 7.0,  ned: 0.248, ppl: 9.1,   color: C.simpo,  note: '2p b4 β3γ0.5 (62.5% LFR)' },
+          { method: 'SFT',         dlfr: 0.8,  ned: 0.298, ppl: 8.5,   color: C.sft,    note: '2p b4 ml2048 200step (55.7% LFR)' },
+          { method: 'GRPO multi',  dlfr: 1.7,  ned: 0.264, ppl: 8.5,   color: C.grpo_m, note: 'mv2 g16 1ep (56.7% LFR)' },
+          { method: 'GDPO',        dlfr: 6.0,  ned: 0.186, ppl: 8.3,   color: C.gdpo,   note: 'v6 g16 1ep bs4 (60.8% LFR; NED 0.186 — most minimal edits)' },
+        ]
+      },
+      'SNLI-Premise (N=200, fair-base)': {
+        baseLfr: 0.630,
+        pending: 'GDPO parse rate 47% (607/1288 CFs) — high self-selection; model outputs only high-confidence flips.',
+        best: [
+          { method: 'Base',        dlfr: 0.0,  ned: 0.314, ppl: 91.4,  color: C.base,   note: '63.0% LFR' },
+          { method: 'DPO',         dlfr: 6.6,  ned: 0.318, ppl: 83.1,  color: C.dpo,    note: '2p b4 2ep (69.4% LFR)' },
+          { method: 'SimPO',       dlfr: 21.5, ned: 0.421, ppl: 92.0,  color: C.simpo,  note: '2p b4 β3γ0.5 (84.0% LFR)' },
+          { method: 'SFT',         dlfr: 0.0,  ned: 0.321, ppl: 98.9,  color: C.sft,    note: '2p b16 1ep (63.1% LFR)' },
+          { method: 'GRPO multi',  dlfr: 15.0, ned: 0.311, ppl: 82.6,  color: C.grpo_m, note: 'mv2 g16 v2fix 1ep (78.0% LFR)' },
+          { method: 'GDPO',        dlfr: 26.2, ned: 0.361, ppl: 79.2,  color: C.gdpo,   note: 'v6 g16 1ep bs4 (89.6% LFR; best 14B result)' },
+        ]
+      },
+      'SNLI-Hypothesis (N=200, fair-base)': {
+        baseLfr: 0.762,
+        pending: '',
+        best: [
+          { method: 'Base',        dlfr: 0.0,  ned: 0.487, ppl: 171.2, color: C.base,   note: '76.2% LFR' },
+          { method: 'DPO',         dlfr: 0.7,  ned: 0.467, ppl: 167.3, color: C.dpo,    note: '2p b4 2ep (76.7% LFR)' },
+          { method: 'SimPO',       dlfr: 13.7, ned: 0.426, ppl: 352.4, color: C.simpo,  note: '2p b4 β3γ0.5 (89.9% LFR)' },
+          { method: 'SFT',         dlfr: 3.9,  ned: 0.482, ppl: 186.9, color: C.sft,    note: '2p b4 2ep (80.2% LFR)' },
+          { method: 'GRPO multi',  dlfr: 9.2,  ned: 0.454, ppl: 242.6, color: C.grpo_m, note: 'mv2 g16 1ep (85.5% LFR)' },
+          { method: 'GDPO',        dlfr: 8.8,  ned: 0.439, ppl: 241.9, color: C.gdpo,   note: 'v6 g16 v2fix 1ep (85.0% LFR)' },
+        ]
+      }
+    }
   },
-  'SNLI-Hypothesis (N=200, fair-base)': {
-    pending: '',
-    best: [
-      { method: 'Base',        dlfr: 0.0,  ned: 0.321, ppl: 245.4, color: C.base,   note: 'LFR ≈44% · Qwen2.5-7B-Instruct' },
-      { method: 'DPO',         dlfr: 21.0, ned: 0.378, ppl: 296.5, color: C.dpo,    note: '2p b4 2ep' },
-      { method: 'SFT',         dlfr: 1.7,  ned: 0.329, ppl: 286.8, color: C.sft,    note: '2p b4 2ep' },
-      { method: 'GRPO single', dlfr: 11.0, ned: 0.269, ppl: 317.3, color: C.grpo_s, note: 'v2 g16 1ep' },
-      { method: 'GRPO multi',  dlfr: 15.1, ned: 0.266, ppl: 702.9, color: C.grpo_m, note: 'mv2 g16 1ep' },
-      { method: 'GDPO',        dlfr: 18.7, ned: 0.361, ppl: 334.9, color: C.gdpo,   note: 'v6 ckpt-6000 0.75ep' },
-    ]
+  {
+    id: 'qwen25-3b',
+    displayName: 'Qwen2.5-3B-Instruct',
+    sortKey: 3,
+    compareShortLabel: 'Qwen-3B',
+    datasets: {
+      'BoolQ (N=200, fair-base)': {
+        baseLfr: 0.305,
+        pending: 'SimPO/SFT/GRPO/GDPO evals queued. DPO +0.0% — 3B cannot learn BoolQ CFs from DPO pairs. GDPO 5ep retraining in progress.',
+        best: [
+          { method: 'Base', dlfr: 0.0, ned: 0.323, ppl: 15.5, color: C.base, note: '30.5% LFR · DPO anchor base_metrics' },
+          { method: 'DPO',  dlfr: 0.0, ned: 0.211, ppl: 13.1, color: C.dpo,  note: '1p b4 200step (30.5% LFR; no improvement)' },
+        ]
+      },
+      'SNLI-Premise (N=200, fair-base)': {
+        baseLfr: 0.326,
+        pending: 'GRPO multi pending. GRPO single training.',
+        best: [
+          { method: 'Base',  dlfr: 0.0,  ned: 0.220, ppl: 86.9,  color: C.base,  note: '32.6% LFR · DPO anchor base_metrics' },
+          { method: 'SimPO', dlfr: 25.5, ned: 0.309, ppl: 95.1,  color: C.simpo, note: '2p b4 β3γ0.5 (59.9% LFR)' },
+          { method: 'GDPO',  dlfr: 17.5, ned: 0.269, ppl: 76.3,  color: C.gdpo,  note: 'v6 g16 bs8 1ep (50.6% LFR)' },
+          { method: 'DPO',   dlfr: 7.9,  ned: 0.228, ppl: 83.1,  color: C.dpo,   note: '1p b4 200step (40.4% LFR)' },
+          { method: 'SFT',   dlfr: 5.2,  ned: 0.229, ppl: 86.5,  color: C.sft,   note: '2p b4 200step (37.7% LFR)' },
+        ]
+      },
+      'SNLI-Hypothesis (N=200, fair-base)': {
+        baseLfr: 0.481,
+        pending: 'GRPO multi pending. GRPO single training. SimPO PPL=2672 excluded (>650 cap).',
+        best: [
+          { method: 'Base', dlfr: 0.0,  ned: 0.387, ppl: 153.0, color: C.base,  note: '48.1% LFR · DPO anchor base_metrics' },
+          { method: 'GDPO', dlfr: 13.6, ned: 0.409, ppl: 203.9, color: C.gdpo,  note: 'v6 g16 bs8 1ep (61.9% LFR; best 3B SNLI-H)' },
+          { method: 'SFT',  dlfr: 3.1,  ned: 0.396, ppl: 174.5, color: C.sft,   note: '2p b4 200step (51.2% LFR)' },
+          { method: 'DPO',  dlfr: 1.9,  ned: 0.374, ppl: 131.6, color: C.dpo,   note: '1p b4 200step (50.0% LFR)' },
+        ]
+      }
+    }
   }
-};
+];
+
+document.title = 'CF Generation — Best Results (7B, 14B & 3B)';
 
 Chart.defaults.color = '#6b7394';
 Chart.defaults.font.family = "'DM Sans', sans-serif";
 
 const app = document.getElementById('app');
 
-Object.entries(datasets).forEach(([dsName, ds]) => {
+function lfrFraction(d, baseLfr) {
+  return d.method === 'Base' ? baseLfr : baseLfr + d.dlfr / 100;
+}
+
+function lfrNedForRow(d, baseLfr) {
+  return lfrFraction(d, baseLfr) / d.ned;
+}
+
+function findMethodRow(ds, methodName) {
+  return ds.best.find(r => r.method === methodName);
+}
+
+function renderCompareSection(parent) {
+  const sorted = [...models].filter(m => !m.placeholder).sort((a, b) => (a.sortKey ?? 0) - (b.sortKey ?? 0));
+  const labels = sorted.map(m => m.compareShortLabel || m.displayName);
+
+  const section = document.createElement('section');
+  section.id = 'cross-model';
+  section.className = 'compare-block';
+
+  const h2 = document.createElement('h2');
+  h2.className = 'model-heading';
+  h2.textContent = 'Cross-model comparison';
+  section.appendChild(h2);
+
+  const lead = document.createElement('p');
+  lead.className = 'compare-lead';
+  lead.innerHTML =
+    'Grouped bars: <strong>absolute LFR (%)</strong> (Base = untuned; tuned = same fair-N + PPL rules as below). ' +
+    'Second row: <strong>&Delta;LFR</strong> vs that model&rsquo;s base. ' +
+    'Models ordered by <code>sortKey</code> (smallest &rarr; largest); add rows with <code>compareShortLabel</code> for compact axes. ' +
+    'Missing bars = method not in the matrix yet for that checkpoint.';
+  section.appendChild(lead);
+
+  const mkGrid = () => {
+    const g = document.createElement('div');
+    g.className = 'compare-grid';
+    return g;
+  };
+
+  const rowL = document.createElement('div');
+  rowL.className = 'compare-row-label';
+  rowL.textContent = 'Absolute LFR (%)';
+  section.appendChild(rowL);
+  const gridLfr = mkGrid();
+  section.appendChild(gridLfr);
+
+  const rowD = document.createElement('div');
+  rowD.className = 'compare-row-label';
+  rowD.style.marginTop = '18px';
+  rowD.textContent = '\u0394LFR (percentage points vs base)';
+  section.appendChild(rowD);
+  const gridDlfr = mkGrid();
+  section.appendChild(gridDlfr);
+
+  const shortDatasetTitle = (name) => {
+    if (name.startsWith('BoolQ')) return 'BoolQ';
+    if (name.startsWith('SNLI-Premise')) return 'SNLI-Premise';
+    if (name.startsWith('SNLI-Hypothesis')) return 'SNLI-Hypothesis';
+    return name;
+  };
+
+  DATASET_ORDER.forEach((dsName, dsi) => {
+    const cardL = document.createElement('div');
+    cardL.className = 'chart-card';
+    cardL.innerHTML = `<h3>${shortDatasetTitle(dsName)} &mdash; LFR %</h3><div class="chart-container compare-chart"><canvas></canvas></div>`;
+    gridLfr.appendChild(cardL);
+
+    const cardD = document.createElement('div');
+    cardD.className = 'chart-card';
+    cardD.innerHTML = `<h3>${shortDatasetTitle(dsName)} &mdash; \u0394LFR</h3><div class="chart-container compare-chart-sm"><canvas></canvas></div>`;
+    gridDlfr.appendChild(cardD);
+
+    const datasetsLfr = METHOD_SERIES.map(ms => {
+      const data = sorted.map(model => {
+        const ds = model.datasets[dsName];
+        if (!ds) return null;
+        const row = findMethodRow(ds, ms.method);
+        if (!row) return null;
+        return lfrFraction(row, ds.baseLfr) * 100;
+      });
+      return {
+        label: ms.method,
+        data,
+        backgroundColor: ms.color + 'BB',
+        borderColor: ms.color,
+        borderWidth: 1.2,
+        borderRadius: 3,
+      };
+    });
+
+    const datasetsDlfr = METHOD_SERIES.map(ms => {
+      const data = sorted.map(model => {
+        const ds = model.datasets[dsName];
+        if (!ds) return null;
+        const row = findMethodRow(ds, ms.method);
+        if (!row) return null;
+        return row.method === 'Base' ? 0 : row.dlfr;
+      });
+      return {
+        label: ms.method,
+        data,
+        backgroundColor: ms.color + 'BB',
+        borderColor: ms.color,
+        borderWidth: 1.2,
+        borderRadius: 3,
+      };
+    });
+
+    const canvasL = cardL.querySelector('canvas');
+    const canvasD = cardD.querySelector('canvas');
+
+    const commonOptions = (isDlfr) => ({
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          display: dsi === 0,
+          position: 'bottom',
+          labels: { boxWidth: 10, padding: 8, font: { size: 9 }, color: '#6b7394' },
+        },
+        tooltip: {
+          callbacks: {
+            title(items) {
+              const i = items[0].dataIndex;
+              return sorted[i].displayName;
+            },
+            label(ctx) {
+              const ms = METHOD_SERIES[ctx.datasetIndex];
+              const model = sorted[ctx.dataIndex];
+              const ds = model.datasets[dsName];
+              const row = ds ? findMethodRow(ds, ms.method) : null;
+              const v = ctx.raw;
+              if (v == null || !row) return `${ms.method}: —`;
+              if (isDlfr) {
+                if (ms.method === 'Base') return `${ms.method}: 0 (reference)`;
+                return `${ms.method}: ${v >= 0 ? '+' : ''}${v.toFixed(1)} pp`;
+              }
+              const lfr = lfrFraction(row, ds.baseLfr) * 100;
+              const dlv = row.method === 'Base' ? 0 : row.dlfr;
+              return `${ms.method}: ${lfr.toFixed(1)}% LFR (\u0394 ${dlv >= 0 ? '+' : ''}${dlv.toFixed(1)} pp)`;
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { color: '#1c2030' },
+          ticks: { font: { size: 10 }, maxRotation: 0 },
+        },
+        y: {
+          grid: { color: '#1c2030' },
+          ticks: { font: { size: 10 } },
+          beginAtZero: true,
+          ...(isDlfr
+            ? { title: { display: true, text: '\u0394LFR (pp)', color: '#6b7394', font: { size: 10 } } }
+            : { max: 100, title: { display: true, text: 'LFR %', color: '#6b7394', font: { size: 10 } } }),
+        },
+      },
+    });
+
+    new Chart(canvasL, {
+      type: 'bar',
+      data: { labels, datasets: datasetsLfr },
+      options: commonOptions(false),
+    });
+
+    new Chart(canvasD, {
+      type: 'bar',
+      data: { labels, datasets: datasetsDlfr },
+      options: commonOptions(true),
+    });
+  });
+
+  parent.appendChild(section);
+}
+
+renderCompareSection(app);
+
+function renderDatasetBlock(dsName, ds, parent) {
   const section = document.createElement('div');
   section.className = 'dataset-section';
 
-  const title = document.createElement('h2');
+  const title = document.createElement('h3');
   title.className = 'dataset-title';
   title.textContent = dsName;
   section.appendChild(title);
@@ -142,13 +505,14 @@ Object.entries(datasets).forEach(([dsName, ds]) => {
   let html = '<table class="best-table"><tr><th>Method</th><th>\u0394LFR</th><th>NED</th><th>PPL</th><th>LFR/NED</th><th>Config</th></tr>';
   const tuned = ds.best.filter(d => d.method !== 'Base');
   const maxDlfrTuned = Math.max(...tuned.map(d => d.dlfr));
+  const baseLfr = ds.baseLfr;
   ds.best.forEach(d => {
     const isBase = d.method === 'Base';
     const isBest = !isBase && d.dlfr === maxDlfrTuned;
     const dlfrStr = isBase ? '—' : (d.dlfr >= 0 ? '+' : '') + d.dlfr.toFixed(1) + '%';
     const nedStr = d.ned.toFixed(3);
     const pplStr = d.ppl.toFixed(1);
-    const lfrNed = isBase ? '—' : ((d.dlfr / 100 + 0.5) / d.ned).toFixed(2);
+    const lfrNed = lfrNedForRow(d, baseLfr).toFixed(2);
     const badge = isBest ? '<span class="best-label">BEST</span>' : '';
     const dlfrColor = isBase ? 'var(--muted)' : (d.dlfr >= 0 ? '#3ecf8e' : '#e8594f');
     html += `<tr class="${isBase ? 'base-row' : ''}">
@@ -172,6 +536,7 @@ Object.entries(datasets).forEach(([dsName, ds]) => {
     { key: 'dlfr', label: '\u0394LFR (%)', signed: true },
     { key: 'ned',  label: 'NED (lower = better)', signed: false },
     { key: 'ppl',  label: 'Perplexity (lower = better)', signed: false },
+    { key: 'lfrNed', label: 'LFR/NED (higher = better)', signed: false, compute: (d) => lfrNedForRow(d, ds.baseLfr) },
   ].forEach(m => {
     const card = document.createElement('div');
     card.className = 'chart-card';
@@ -180,7 +545,7 @@ Object.entries(datasets).forEach(([dsName, ds]) => {
 
     const canvas = card.querySelector('canvas');
     const data = ds.best;
-    const values = data.map(d => d[m.key]);
+    const values = data.map(d => (m.compute ? m.compute(d) : d[m.key]));
     const bgColors = data.map(d => d.color + 'AA');
     const bdColors = data.map(d => d.color);
 
@@ -207,6 +572,7 @@ Object.entries(datasets).forEach(([dsName, ds]) => {
               label(ctx) {
                 const v = ctx.raw;
                 if (m.key === 'dlfr') return (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
+                if (m.key === 'lfrNed') return v.toFixed(2);
                 return v.toFixed(m.key === 'ned' ? 3 : 1);
               }
             }
@@ -228,7 +594,32 @@ Object.entries(datasets).forEach(([dsName, ds]) => {
   });
 
   section.appendChild(row);
-  app.appendChild(section);
+  parent.appendChild(section);
+}
+
+models.forEach(model => {
+  const wrap = document.createElement('section');
+  wrap.className = 'model-section';
+  wrap.id = model.id;
+
+  const mh = document.createElement('h2');
+  mh.className = 'model-heading';
+  mh.textContent = model.displayName;
+  wrap.appendChild(mh);
+
+  if (model.placeholder) {
+    const p = document.createElement('p');
+    p.className = 'model-placeholder';
+    p.textContent = model.placeholderText;
+    wrap.appendChild(p);
+    app.appendChild(wrap);
+    return;
+  }
+
+  Object.entries(model.datasets).forEach(([dsName, ds]) => {
+    renderDatasetBlock(dsName, ds, wrap);
+  });
+  app.appendChild(wrap);
 });
 </script>
 </body>

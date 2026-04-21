@@ -1,46 +1,57 @@
 # Self-Align to Explain
 ### Comparing Post-Training Methods for Counterfactual Generation
 
-This thesis compares post-training self-alignment methods — SFT, DPO, GRPO, and GDPO — for counterfactual example generation. We evaluate each method's ability to produce minimal, fluent edits that flip classifier predictions, measuring label flip rate, edit distance, and perplexity.
+This thesis compares post-training self-alignment methods — SFT, DPO, SimPO, GRPO, and GDPO — for counterfactual example generation. We evaluate each method's ability to produce minimal, fluent edits that flip classifier predictions, measuring label flip rate, edit distance, and perplexity.
 
 ---
 
 ## Research Goal
 
-This project investigates how different post-training methods affect a language model's ability to generate **minimal, label-flipping counterfactuals** for text classification tasks. All methods fine-tune Qwen/Qwen2.5-7B-Instruct with QLoRA (4-bit, LoRA r=32, alpha=16, lr=5e-6) on three datasets: **BoolQ** (edit passage to flip yes/no answer), **SNLI-Premise** and **SNLI-Hypothesis** (edit premise/hypothesis to change NLI relationship).
+This project investigates how different post-training methods affect a language model's ability to generate **minimal, label-flipping counterfactuals** for text classification tasks. All methods fine-tune **Qwen/Qwen2.5-7B-Instruct** (primary) with QLoRA (4-bit, LoRA r=32, alpha=16, lr=5e-6) on three datasets: **BoolQ** (edit passage to flip yes/no answer), **SNLI-Premise** and **SNLI-Hypothesis** (edit premise/hypothesis to change NLI relationship). Scale-ups to **Qwen2.5-14B-Instruct** and **Qwen2.5-3B-Instruct** use the same recipe.
 
 
-| Method   | Type      | Description                                                                         |
-| -------- | --------- | ----------------------------------------------------------------------------------- |
-| **SFT**  | Offline   | Supervised Fine-Tuning on successful counterfactuals only                           |
-| **DPO**  | Offline   | Direct Preference Optimization on pre-generated preference pairs                    |
-| **GRPO** | Online RL | Group Relative Policy Optimization with reward-driven generation during training    |
-| **GDPO** | Online RL | Group reward-Decoupled normalization Policy Optimization (per-reward normalization) |
+| Method    | Type      | Description                                                                         |
+| --------- | --------- | ----------------------------------------------------------------------------------- |
+| **SFT**   | Offline   | Supervised Fine-Tuning on successful counterfactuals only                           |
+| **DPO**   | Offline   | Direct Preference Optimization on pre-generated preference pairs                    |
+| **SimPO** | Offline   | Simple Preference Optimization — reference-free CPO variant with length normalization and margin γ |
+| **GRPO**  | Online RL | Group Relative Policy Optimization with reward-driven generation during training    |
+| **GDPO**  | Online RL | Group reward-Decoupled normalization Policy Optimization (per-reward normalization) |
 
 
 ---
 
 ## Results
 
-Best ΔLFR (label flip rate improvement over base model) per method, using fair-base N=200 evaluation:
+Best ΔLFR (label flip rate improvement over base model) per method, using fair-base N=200 evaluation on **Qwen2.5-7B-Instruct**:
 
 
 | Method              | BoolQ      | SNLI-Premise | SNLI-Hypothesis |
 | ------------------- | ---------- | ------------ | --------------- |
 | **DPO**             | **+10.5%** | +17.3%       | **+21.0%**      |
+| SimPO               | +9.8%      | **+27.1%**   | +26.4%          |
 | SFT                 | +1.8%      | -1.7%        | +1.7%           |
-| GRPO (g16 mv2)      | +1.7%      | **+27.5%**   | +15.1%          |
-| GDPO v6 (best ckpt) | +1.1%      | +18.2%       | **+18.7%**      |
+| GRPO (mv2 g16)      | +1.7%      | +27.5%       | +15.1%          |
+| GDPO v6 (best ckpt) | +1.1%      | +18.2%       | +18.7%          |
+
+Scale-up highlights (fair-base N=200, see `RESULTS.md`):
+
+| Model | Best SNLI-P | Best SNLI-H | Best BoolQ |
+| ----- | ----------- | ----------- | ---------- |
+| 7B    | GRPO +27.5% | SimPO +26.4% | DPO +10.5% |
+| 14B   | GDPO +26.2% | SimPO +13.7% | SimPO +7.0% |
+| 3B    | SimPO +25.5% | GDPO +13.6% | DPO +0.0% |
 
 
 **Key findings:**
 
-- **GRPO mv2 g16 is the best overall method**: +27.5% on SNLI-P, +15.1% on SNLI-H, +1.7% on BoolQ
-- **GDPO v6 with early stopping surpasses GRPO on SNLI-H**: +18.7% vs +15.1%
-- **DPO leads on BoolQ** (+10.5%); all online RL methods struggle on BoolQ (long passages, format collapse)
-- **Learning rate is the dominant factor for GDPO**: lr=1e-6 gives near-zero ΔLFR; lr=5e-6 unlocks +15.7-18.7%
+- **GRPO mv2 g16 is the best 7B method on SNLI-P**: +27.5%; SimPO matches closely (+27.1%) with much simpler offline training
+- **SimPO dominates at 14B scale**: +26.2% SNLI-P (but GDPO v6 achieves the same via richer training), +13.7% SNLI-H
+- **GDPO v6 with early stopping surpasses GRPO on 7B SNLI-H**: +18.7% vs +15.1%
+- **DPO leads on 7B BoolQ** (+10.5%); 3B cannot learn BoolQ CFs at all from DPO pairs (+0.0%)
 - **Conditioned rewards + KL penalty > more groups**: GDPO v6 (8 groups) +15.7% > paper-match (32 groups) +7.6%
 - **Early stopping is dataset-dependent**: GDPO peaks at ~0.25ep on SNLI-P, ~0.75ep on SNLI-H
+- **PPL matters**: SimPO SNLI-H achieves very high ΔLFR but at the cost of fluency (PPL >1000 in grid-best configs)
 
 See `RESULTS.md` for complete results and `OVERVIEW.md` for detailed analysis.
 
@@ -48,12 +59,12 @@ See `RESULTS.md` for complete results and `OVERVIEW.md` for detailed analysis.
 
 ## Pipeline Overview
 
-**DPO / SFT** use pre-generated training data:
+**DPO / SimPO / SFT / KTO** use pre-generated training data:
 
 ```
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
 │   Dataset   │ ─▶ │  Generate   │ ─▶ │  Evaluate   │ ─▶ │  Construct  │ ─▶ │    Train    │ ─▶ │   Compare   │
-│  (any type) │    │     CFs     │    │     CFs     │    │ Train Data  │    │  DPO / SFT  │    │   Models    │
+│  (any type) │    │     CFs     │    │     CFs     │    │ Train Data  │    │DPO/SFT/SimPO│    │   Models    │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
                          │                  │                  │                  │                  │
                          ▼                  ▼                  ▼                  ▼                  ▼
@@ -74,7 +85,7 @@ See `RESULTS.md` for complete results and `OVERVIEW.md` for detailed analysis.
 
 ## Usage
 
-### Stage 1-3: Generate Training Data (DPO/SFT only)
+### Stage 1-3: Generate Training Data (DPO/SimPO/SFT/KTO only)
 
 ```bash
 # Generate counterfactuals
@@ -107,6 +118,17 @@ python train_dpo.py \
     --num_train_epochs 2 --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
     --use_4bit --bf16 --gradient_checkpointing \
     --use_wandb --wandb_run_name "dpo-boolq-1p-b4-2ep"
+```
+
+**SimPO** (reference-free; requires `beta` and `simpo_gamma`):
+
+```bash
+python train_dpo.py \
+    --dataset_path ./results/dpo_pairs_boolq/dpo_training.jsonl \
+    --output_dir ./results/simpo_model_boolq \
+    --loss_type simpo --beta 3.0 --simpo_gamma 0.5 \
+    --num_train_epochs 2 --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
+    --use_4bit --bf16 --gradient_checkpointing
 ```
 
 **SFT** (uses "chosen" column only; overfits quickly, ~0.2-0.5 epochs recommended):
@@ -147,6 +169,20 @@ python train_gdpo.py \
 
 Best config (v6): `generation_batch_size=128` (8 groups for meaningful batch normalization), `--conditioned_rewards` (similarity gated on flip), `--beta 0.0005` (KL penalty), `--epsilon_high 0.28` (DAPO asymmetric clipping). See `OVERVIEW.md` section 5 for the full GDPO analysis.
 
+**Orchestrated pipelines** (recommended for full runs):
+
+```bash
+# 7B / 14B: full pipeline (generate → build pairs → train → eval)
+MODEL=Qwen/Qwen2.5-14B-Instruct TAG=qwen25_14b ./submit_model_pipeline.sh
+
+# 3B: equivalent pipeline
+./submit_3b_pipeline.sh
+
+# Post-hoc fair eval for any adapter (14B or 3B)
+ADAPTER_DIR=results/my_model DATASET=boolq ./run_eval_14b_fair.sh
+ADAPTER_DIR=results/my_model DATASET=boolq ./run_eval_3b_fair.sh
+```
+
 ### Stage 5: Evaluate
 
 ```bash
@@ -173,7 +209,7 @@ Unified Score = flip_bonus + (confidence × similarity)
 where flip_bonus = 100 if label flipped, 0 otherwise
 ```
 
-Chosen pool: only label-flipping CFs (sorted best-first). Rejected pool: all valid CFs (sorted worst-first). Pairs are formed 1-to-1: best chosen ↔ worst rejected, 2nd-best ↔ 2nd-worst. This ensures each pair has maximum contrast. DPO uses both columns; SFT uses only chosen.
+Chosen pool: only label-flipping CFs (sorted best-first). Rejected pool: all valid CFs (sorted worst-first). Pairs are formed 1-to-1: best chosen ↔ worst rejected, 2nd-best ↔ 2nd-worst. This ensures each pair has maximum contrast. DPO/SimPO use both columns; SFT and KTO use only the chosen column.
 
 ### Generation Diversity
 
@@ -200,13 +236,22 @@ cfg-dpo/
 ├── evaluate_counterfactuals.py    # Stage 2: Evaluate CFs
 ├── construct_dpo_pairs.py         # Stage 3: Build training data
 │
-├── train_dpo.py                   # Stage 4: DPO training
+├── train_dpo.py                   # Stage 4: DPO / SimPO training (also supports KTO via --loss_type kto)
 ├── train_sft.py                   # Stage 4: SFT training
 ├── train_grpo.py                  # Stage 4: GRPO (+ reward functions)
 ├── train_gdpo.py                  # Stage 4: GDPO (per-reward normalization)
 ├── gdpo_trainer.py                # GDPOTrainer subclass
 │
 ├── evaluate_models.py             # Stage 5: Model comparison
+│
+├── submit_model_pipeline.sh       # Orchestrate full pipeline (7B/14B)
+├── submit_3b_pipeline.sh          # Orchestrate full pipeline (3B)
+├── run_dpo_sweep.sh               # DPO / SimPO / KTO Slurm job
+├── run_grpo.sh                    # GRPO Slurm job
+├── run_gdpo.sh                    # GDPO Slurm job
+├── run_sft_train_only.sh          # SFT training Slurm job (no inline eval)
+├── run_eval_14b_fair.sh           # Fair eval for any 14B adapter
+├── run_eval_3b_fair.sh            # Fair eval for any 3B adapter
 │
 ├── RESULTS.md                     # Full evaluation results
 ├── OVERVIEW.md                    # Detailed method analysis
@@ -237,10 +282,10 @@ All training scripts support `--use_wandb` with `--wandb_run_name`. Dashboard: [
 
 ## Future Work
 
-- **Fair comparison analysis** — GRPO-fair runs (GRPO with GDPO's stabilization tricks) pending to isolate per-reward normalization effect
-- **BoolQ** — All online RL methods struggle; DPO remains best (+10.5%). Longer sequences, SFT warm-start, and NED penalties tried without meaningful improvement
+- **GRPO single vs multi reward at scale** — 14B and 3B GRPO single-reward runs underway; 7B results favour multi-reward but scale effect is unknown
+- **BoolQ** — All methods yield marginal gains at 7B (+1.1–10.5%) and fail entirely at 3B (+0.0%); DPO remains best at 7B/14B; online RL methods struggle with long passages
 - **Benchmark evaluation** — Check for capability degradation on MMLU, HellaSwag, ARC
-- **Optimal early stopping** — Checkpoint sweeps needed across all methods and datasets
+- **Optimal early stopping** — Checkpoint sweeps completed for GDPO 7B; to be extended to 14B/3B
 
 ## License
 
