@@ -98,22 +98,10 @@ class GDPOTrainer(GRPOTrainer):
         combined = torch.stack(all_adv, dim=1)
         pre_bn = (combined * weights.unsqueeze(0)).nansum(dim=1)
 
-        # Dynamic sampling: zero out advantages for groups where all rewards
-        # have zero variance (no learning signal). Inspired by DAPO's
-        # filter_groups and the GDPO paper's training configuration.
-        combined_per_group = pre_bn.view(-1, num_gen)
-        group_var = combined_per_group.var(dim=1)
-        zero_var_mask = (group_var < 1e-8).repeat_interleave(num_gen)
-        n_zero_var = zero_var_mask.sum().item() // num_gen
-
-        pre_bn_valid = pre_bn.clone()
-        pre_bn_valid[zero_var_mask] = 0.0
-
-        if pre_bn_valid.std() > 1e-8:
-            advantages = (pre_bn_valid - pre_bn_valid.mean()) / (pre_bn_valid.std() + 1e-4)
-        else:
-            advantages = torch.zeros_like(pre_bn_valid)
-        advantages[zero_var_mask] = 0.0
+        # Batch-wise normalization (matches NVLabs reference exactly)
+        bn_mean = pre_bn.mean()
+        bn_std = pre_bn.std()
+        advantages = (pre_bn - bn_mean) / (bn_std + 1e-4)
 
         result["advantages"] = advantages
 
@@ -124,11 +112,9 @@ class GDPOTrainer(GRPOTrainer):
                 f"{reward_names[i]}={all_adv[i].mean():.3f}±{all_adv[i].std():.3f}"
                 for i in range(len(all_adv))
             )
-            n_groups = n // num_gen
             print(
                 f"  [GDPO #{self._gdpo_step}] "
                 f"adv_delta(L2)={delta.norm():.4f} mean_abs={delta.mean():.4f} | "
-                f"zero_var_groups={n_zero_var}/{n_groups} | "
                 f"per-reward adv: {per_reward_stats}"
             )
 

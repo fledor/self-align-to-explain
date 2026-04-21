@@ -24,6 +24,22 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training, PeftModel
 from trl import DPOConfig, DPOTrainer
 
+try:
+    from trl.experimental.cpo import CPOConfig, CPOTrainer
+    HAS_CPO = True
+except ImportError:
+    try:
+        from trl import CPOConfig, CPOTrainer
+        HAS_CPO = True
+    except ImportError:
+        HAS_CPO = False
+
+try:
+    from trl import KTOConfig, KTOTrainer
+    HAS_KTO = True
+except ImportError:
+    HAS_KTO = False
+
 from config import Config
 
 
@@ -185,8 +201,28 @@ def parse_args():
         "--loss_type",
         type=str,
         default="sigmoid",
-        choices=["sigmoid", "hinge", "ipo", "kto_pair"],
-        help="DPO loss type",
+        choices=["sigmoid", "hinge", "ipo", "kto_pair", "robust", "exo_pair",
+                 "nca_pair", "bco_pair", "sppo_hard", "apo_zero", "apo_down",
+                 "discopop", "simpo", "kto"],
+        help="DPO loss type. 'simpo' uses CPOTrainer; 'kto' uses KTOTrainer (expands pairs to binary labels); all others use DPOTrainer.",
+    )
+    parser.add_argument(
+        "--label_smoothing",
+        type=float,
+        default=0.0,
+        help="Label smoothing for robust DPO (models annotation noise; 0.0-0.5). Required >0 for exo_pair.",
+    )
+    parser.add_argument(
+        "--simpo_gamma",
+        type=float,
+        default=1.4,
+        help="Target reward margin for SimPO (only used with loss_type=simpo). Paper recommends 0.5-1.4.",
+    )
+    parser.add_argument(
+        "--cpo_alpha",
+        type=float,
+        default=0.0,
+        help="Weight of BC regularizer for CPO-SimPO (0.0=pure SimPO, >0=CPO-SimPO hybrid).",
     )
     
     # Logging arguments
@@ -241,6 +277,20 @@ def parse_args():
     )
     
     return parser.parse_args()
+
+
+def expand_to_kto_format(dataset) -> "Dataset":
+    """Expand paired (prompt, chosen, rejected) dataset to KTO binary format.
+
+    KTOTrainer expects rows of {prompt, completion, label} where label is a
+    bool (True = desirable, False = undesirable).  Each DPO pair becomes two
+    independent examples so the trainer sees an equal mix of both classes.
+    """
+    rows = []
+    for ex in dataset:
+        rows.append({"prompt": ex["prompt"], "completion": ex["chosen"],  "label": True})
+        rows.append({"prompt": ex["prompt"], "completion": ex["rejected"], "label": False})
+    return Dataset.from_list(rows)
 
 
 def load_preference_dataset(dataset_path: str, split: str, max_samples: Optional[int] = None):
@@ -405,45 +455,125 @@ def main():
                 "gradient_accumulation_steps": args.gradient_accumulation_steps,
                 "max_steps": args.max_steps,
                 "beta": args.beta,
-                "method": "dpo",
+                "loss_type": args.loss_type,
+                "label_smoothing": args.label_smoothing,
+                "simpo_gamma": args.simpo_gamma if args.loss_type == "simpo" else None,
+                "cpo_alpha": args.cpo_alpha if args.loss_type == "simpo" else None,
+                "method": "simpo" if args.loss_type == "simpo" else ("kto" if args.loss_type == "kto" else "dpo"),
             }
         )
         print(f"\n📊 W&B logging enabled: {args.wandb_entity}/{args.wandb_project}")
     
-    # Configure DPO training
-    print("\n⚙️ Configuring DPO trainer...")
-    training_args = DPOConfig(
-        output_dir=args.output_dir,
-        num_train_epochs=args.num_train_epochs,
-        max_steps=args.max_steps if args.max_steps > 0 else -1,
-        per_device_train_batch_size=args.per_device_train_batch_size,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        learning_rate=args.learning_rate,
-        max_length=args.max_length,
-        beta=args.beta,
-        loss_type=args.loss_type,
-        logging_steps=args.logging_steps,
-        save_steps=args.save_steps,
-        warmup_ratio=args.warmup_ratio,
-        bf16=args.bf16,
-        fp16=args.fp16,
-        gradient_checkpointing=args.gradient_checkpointing,
-        remove_unused_columns=False,
-        optim="adamw_torch",
-        lr_scheduler_type="cosine",
-        report_to="wandb" if args.use_wandb else "none",
-    )
-    
-    # Initialize DPO Trainer
-    # When using LoRA, we don't need a reference model as it's computed implicitly
-    trainer = DPOTrainer(
-        model=model,
-        ref_model=None,  # Not needed with LoRA - computed from frozen base weights
-        args=training_args,
-        train_dataset=train_dataset,
-        processing_class=tokenizer,
-        peft_config=peft_config,
-    )
+    use_simpo = args.loss_type == "simpo"
+    use_kto   = args.loss_type == "kto"
+
+    if use_kto:
+        if not HAS_KTO:
+            raise ImportError("KTO requires KTOTrainer. Install trl>=0.8.0")
+        print("\n⚙️ Configuring KTO trainer...")
+        kto_dataset = expand_to_kto_format(train_dataset)
+        print(f"   Expanded {len(train_dataset)} pairs → {len(kto_dataset)} KTO examples")
+        # KTOTrainer requires actual (per-device) batch size > 1 — the KL divergence
+        # estimate collapses to zero with a single-example batch. Enforce bs >= 2 by
+        # halving gradient_accumulation_steps to keep the same effective batch size.
+        kto_per_device_bs = max(2, args.per_device_train_batch_size)
+        kto_grad_accum = max(1, args.gradient_accumulation_steps // (kto_per_device_bs // max(1, args.per_device_train_batch_size)))
+        if kto_per_device_bs != args.per_device_train_batch_size:
+            print(f"   KTO: adjusted per_device_batch {args.per_device_train_batch_size}→{kto_per_device_bs}, grad_accum {args.gradient_accumulation_steps}→{kto_grad_accum} (effective batch unchanged)")
+        training_args = KTOConfig(
+            output_dir=args.output_dir,
+            num_train_epochs=args.num_train_epochs,
+            max_steps=args.max_steps if args.max_steps > 0 else -1,
+            per_device_train_batch_size=kto_per_device_bs,
+            gradient_accumulation_steps=kto_grad_accum,
+            learning_rate=args.learning_rate,
+            max_length=args.max_length,
+            beta=args.beta,
+            logging_steps=args.logging_steps,
+            save_steps=args.save_steps,
+            warmup_ratio=args.warmup_ratio,
+            bf16=args.bf16,
+            fp16=args.fp16,
+            gradient_checkpointing=args.gradient_checkpointing,
+            remove_unused_columns=False,
+            optim="adamw_torch",
+            lr_scheduler_type="cosine",
+            report_to="wandb" if args.use_wandb else "none",
+        )
+        trainer = KTOTrainer(
+            model=model,
+            ref_model=None,
+            args=training_args,
+            train_dataset=kto_dataset,
+            processing_class=tokenizer,
+            peft_config=peft_config,
+        )
+    elif use_simpo:
+        if not HAS_CPO:
+            raise ImportError("SimPO requires CPOTrainer. Install trl>=0.16.0 or check trl.experimental.cpo")
+        print("\n⚙️ Configuring CPO trainer (SimPO mode)...")
+        training_args = CPOConfig(
+            output_dir=args.output_dir,
+            num_train_epochs=args.num_train_epochs,
+            max_steps=args.max_steps if args.max_steps > 0 else -1,
+            per_device_train_batch_size=args.per_device_train_batch_size,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            learning_rate=args.learning_rate,
+            max_length=args.max_length,
+            beta=args.beta,
+            loss_type="simpo",
+            cpo_alpha=args.cpo_alpha,
+            simpo_gamma=args.simpo_gamma,
+            logging_steps=args.logging_steps,
+            save_steps=args.save_steps,
+            warmup_ratio=args.warmup_ratio,
+            bf16=args.bf16,
+            fp16=args.fp16,
+            gradient_checkpointing=args.gradient_checkpointing,
+            remove_unused_columns=False,
+            optim="adamw_torch",
+            lr_scheduler_type="cosine",
+            report_to="wandb" if args.use_wandb else "none",
+        )
+        trainer = CPOTrainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            processing_class=tokenizer,
+            peft_config=peft_config,
+        )
+    else:
+        print("\n⚙️ Configuring DPO trainer...")
+        training_args = DPOConfig(
+            output_dir=args.output_dir,
+            num_train_epochs=args.num_train_epochs,
+            max_steps=args.max_steps if args.max_steps > 0 else -1,
+            per_device_train_batch_size=args.per_device_train_batch_size,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            learning_rate=args.learning_rate,
+            max_length=args.max_length,
+            beta=args.beta,
+            loss_type=args.loss_type,
+            label_smoothing=args.label_smoothing,
+            logging_steps=args.logging_steps,
+            save_steps=args.save_steps,
+            warmup_ratio=args.warmup_ratio,
+            bf16=args.bf16,
+            fp16=args.fp16,
+            gradient_checkpointing=args.gradient_checkpointing,
+            remove_unused_columns=False,
+            optim="adamw_torch",
+            lr_scheduler_type="cosine",
+            report_to="wandb" if args.use_wandb else "none",
+        )
+        trainer = DPOTrainer(
+            model=model,
+            ref_model=None,
+            args=training_args,
+            train_dataset=train_dataset,
+            processing_class=tokenizer,
+            peft_config=peft_config,
+        )
     
     # Train
     print("\n🚀 Starting training...")
