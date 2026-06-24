@@ -136,8 +136,8 @@ h1 {
 <body>
 
 <h1>Counterfactual Generation &mdash; Best Results</h1>
-<p class="subtitle">7B: best &Delta;LFR <strong>per method</strong> on fair N=200 in <a href="RESULTS.md">RESULTS.md</a>, using tuned runs with <strong>mean PPL &lt; 650</strong> (drops e.g. SimPO SNLI-H grid-best +29.7% @ PPL 1202 in favour of v2fix +29.4% @ PPL 617; drops <code>simpo_qual</code> +32.1% @ ~4.4k PPL, GRPO v2 g24 +22.6% @ ~9.6k PPL — full table in RESULTS). 14B: complete (5 methods × 3 datasets); GRPO single training. 3B: SNLI-P/H DPO/SimPO/SFT/GDPO done; GRPO multi/single evals pending; BoolQ DPO +0.0%, others queued; GDPO 5ep retraining. KTO 7B training. SimPO SNLI-H 3B PPL=2672 excluded.</p>
-<p class="model-toc">Jump to: <a href="#cross-model">Cross-model</a> &middot; <a href="#qwen25-7b">Qwen2.5-7B-Instruct</a> &middot; <a href="#qwen25-14b">Qwen2.5-14B-Instruct</a> &middot; <a href="#qwen25-3b">Qwen2.5-3B-Instruct</a></p>
+<p class="subtitle">Best &Delta;LFR per method, fair-base N=200. <strong>Parse%</strong> = fraction of generation attempts that produced a valid <code>&lt;edit&gt;&hellip;&lt;/edit&gt;</code> output (10 attempts/sample); ⚠&nbsp;&lt;60%, ⛔&nbsp;&lt;10%. Entries with parse&nbsp;&lt;&nbsp;15% are <strong>excluded</strong> (LFR over &lt;300/2000 attempts is unreliable). NED = <strong>median</strong> over non-trivial edits (NED&gt;0); PPL = <strong>median</strong>. Full results: <a href="RESULTS.md">RESULTS.md</a>.</p>
+<p class="model-toc">Jump to: <a href="#cross-model">Cross-model</a> &middot; <a href="#qwen25-7b">Qwen2.5-7B-Instruct</a> &middot; <a href="#qwen25-14b">Qwen2.5-14B-Instruct</a> &middot; <a href="#qwen25-3b">Qwen2.5-3B-Instruct</a> &middot; <a href="#llama31-8b">Llama-3.1-8B-Instruct</a></p>
 
 <div class="legend-bar">
   <div class="legend-item"><div class="legend-dot" style="background:#5a6178"></div> Base (no tuning)</div>
@@ -154,7 +154,7 @@ h1 {
 <script>
 const C = {
   base: '#5a6178', dpo: '#4f8ff7', simpo: '#2dd4bf', sft: '#7c5cbf',
-  grpo_s: '#e8594f', grpo_m: '#f5a623', gdpo: '#3ecf8e', kto: '#f97316'
+  grpo_s: '#e8594f', grpo_m: '#f5a623', gdpo: '#3ecf8e'
 };
 
 const METHOD_SERIES = [
@@ -165,7 +165,7 @@ const METHOD_SERIES = [
   { method: 'GRPO single', color: C.grpo_s },
   { method: 'GRPO multi',  color: C.grpo_m },
   { method: 'GDPO',        color: C.gdpo },
-  { method: 'KTO',         color: C.kto },
+
 ];
 
 const DATASET_ORDER = [
@@ -182,42 +182,42 @@ const models = [
     compareShortLabel: 'Qwen-7B',
     datasets: {
       'BoolQ (N=200, fair-base)': {
-        baseLfr: 0.372,
+        baseLfr: 0.378,
         pending: '',
         best: [
-          { method: 'Base',        dlfr: 0.0,  ned: 0.171, ppl: 12.1,  color: C.base,   note: '37.2% LFR · grpo_mv2 CF export' },
-          { method: 'DPO',         dlfr: 10.5, ned: 0.110, ppl: 23.9,  color: C.dpo,    note: '1p b4 2ep sigmoid (48.0% LFR)' },
-          { method: 'SimPO',       dlfr: 21.8, ned: 0.167, ppl: 12.5,  color: C.simpo,  note: '2p b4 β3γ0.5 (59.0% LFR)' },
-          { method: 'SFT',         dlfr: 1.8,  ned: 0.162, ppl: 11.6,  color: C.sft,    note: '2p b4 ml2048 200step (38.4% LFR)' },
-          { method: 'GRPO single', dlfr: 0.4,  ned: 0.151, ppl: 11.7,  color: C.grpo_s, note: 'v2 g16 ~0.11ep (37.7% LFR)' },
-          { method: 'GRPO multi',  dlfr: 1.7,  ned: 0.159, ppl: 12.0,  color: C.grpo_m, note: 'mv2 g16 mcl768 ~0.25ep (38.2% LFR)' },
-          { method: 'GDPO',        dlfr: 1.1,  ned: 0.166, ppl: 11.8,  color: C.gdpo,   note: 'mv2 g16 ckpt200 (37.7% LFR)' },
+          { method: 'Base',        dlfr: 0.0,  ned: 0.107, ppl: 9.6,  parse: 82.3, color: C.base,   note: '37.8% LFR · canonical fair base (grpo_mv2_g16 anchor)' },
+          { method: 'DPO',         dlfr: 22.1, ned: 0.093, ppl: 8.8,  parse: 51.1, color: C.dpo,    note: '2p b4 fair (59.9% LFR; fair re-eval, canonical base)' },
+          { method: 'SimPO',       dlfr: 28.6, ned: 0.115, ppl: 8.8,  parse: 68.0, color: C.simpo,  note: '2p b4 β3γ0.5 fair (66.7% LFR; canonical base — best)' },
+          { method: 'SFT',         dlfr: 9.6,  ned: 0.141, ppl: 8.4,  parse: 79.8, color: C.sft,    note: '2p b4 fair (47.2% LFR; fair re-eval)' },
+          { method: 'GRPO single', dlfr: 21.2, ned: 0.086, ppl: 8.3,  parse: 45.0, color: C.grpo_s, note: 'v2 g16 lr=1e-5 fair (59.0% LFR; lr=1e-5 lifts +13.5pp over default lr)' },
+          { method: 'GRPO multi',  dlfr: 18.8, ned: 0.090, ppl: 8.1,  parse: 52.0, color: C.grpo_m, note: 'mv2 g16 lr=1e-5 fair (56.6% LFR; lr=1e-5 lifts +9pp over default lr)' },
+          { method: 'GDPO',        dlfr: 1.1,  ned: 0.106, ppl: 9.6,  parse: 82.3, color: C.gdpo,   note: 'g16 ckpt200 (37.7% LFR; genuinely weak — BoolQ edit-location issue)' },
         ]
       },
       'SNLI-Premise (N=200, fair-base)': {
         baseLfr: 0.522,
         pending: '',
         best: [
-          { method: 'Base',        dlfr: 0.0,  ned: 0.241, ppl: 136.2, color: C.base,   note: '52.2% LFR · fair N=200' },
-          { method: 'DPO',         dlfr: 15.7, ned: 0.301, ppl: 133.3, color: C.dpo,    note: '1p b4 2ep (68.0% LFR)' },
-          { method: 'SimPO',       dlfr: 30.5, ned: 0.346, ppl: 157.6, color: C.simpo,  note: '2p b4 simpo v2fix (83.4% LFR; v2fix preference data)' },
-          { method: 'SFT',         dlfr: 0.9,  ned: 0.250, ppl: 130.5, color: C.sft,    note: '2p b16 1ep (53.2% LFR; fair grid)' },
-          { method: 'GRPO single', dlfr: 25.8, ned: 0.345, ppl: 110.6, color: C.grpo_s, note: 'v2 g16 0.5ep' },
-          { method: 'GRPO multi',  dlfr: 29.1, ned: 0.336, ppl: 92.9,  color: C.grpo_m, note: 'mv2 g16 v2fix 1ep' },
-          { method: 'GDPO',        dlfr: 18.2, ned: 0.303, ppl: 145.4, color: C.gdpo,   note: 'v6 ckpt-2000 0.25ep' },
+          { method: 'Base',        dlfr: 0.0,  ned: 0.227, ppl: 57.6, parse: 68.6, color: C.base,   note: '52.2% LFR · fair N=200' },
+          { method: 'DPO',         dlfr: 24.5, ned: 0.311, ppl: 53.5, parse: 51.0, color: C.dpo,    note: '2p b4 fair (78.0% LFR; fair re-eval, was 1p +15.7%)' },
+          { method: 'SimPO',       dlfr: 30.5, ned: 0.340, ppl: 59.6, parse: 61.1, color: C.simpo,  note: '2p b4 simpo v2fix (83.4% LFR; v2fix preference data)' },
+          { method: 'SFT',         dlfr: 1.8,  ned: 0.250, ppl: 55.1, parse: 74.0, color: C.sft,    note: '2p fair (53.8% LFR; SFT weak on premise across all scales)' },
+          { method: 'GRPO single', dlfr: 25.9, ned: 0.337, ppl: 62.5, parse: 48.0, color: C.grpo_s, note: 'v2 g16 0.5ep' },
+          { method: 'GRPO multi',  dlfr: 29.1, ned: 0.327, ppl: 52.8, parse: 44.5, color: C.grpo_m, note: 'mv2 g16 v2fix 1ep' },
+          { method: 'GDPO',        dlfr: 18.2, ned: 0.303, ppl: 53.6, parse: 71.2, color: C.gdpo,   note: 'v6 ckpt-2000 0.25ep' },
         ]
       },
       'SNLI-Hypothesis (N=200, fair-base)': {
         baseLfr: 0.443,
-        pending: 'PPL cap ~650: β3γ0.5 grid best (+29.7%, PPL 1202) excluded; v2fix (+29.4%, PPL 617) shown instead. <code>simpo_qual</code> +32.1% @ PPL 4.4k excluded.',
+        pending: 'SimPO v2fix shown; grid-best β3γ0.5 (+29.7%) lacks saved CFs for median recheck.',
         best: [
-          { method: 'Base',        dlfr: 0.0,  ned: 0.321, ppl: 245.4, color: C.base,   note: '44.3% LFR · fair N=200' },
-          { method: 'DPO',         dlfr: 21.0, ned: 0.378, ppl: 296.5, color: C.dpo,    note: '2p b4 2ep' },
-          { method: 'SimPO',       dlfr: 29.4, ned: 0.390, ppl: 617.1, color: C.simpo,  note: '2p b4 β3γ0.5 v2fix (73.6% LFR; grid-best +29.7% @ PPL 1202 in RESULTS)' },
-          { method: 'SFT',         dlfr: 1.7,  ned: 0.329, ppl: 286.8, color: C.sft,    note: '2p b4 2ep' },
-          { method: 'GRPO single', dlfr: 11.0, ned: 0.269, ppl: 317.3, color: C.grpo_s, note: 'v2 g16 1ep' },
-          { method: 'GRPO multi',  dlfr: 22.6, ned: 0.358, ppl: 508.3, color: C.grpo_m, note: 'mv2 g16 v2fix 1ep' },
-          { method: 'GDPO',        dlfr: 18.7, ned: 0.361, ppl: 334.9, color: C.gdpo,   note: 'v6 ckpt-6000 0.75ep' },
+          { method: 'Base',        dlfr: 0.0,  ned: 0.326, ppl: 98.0,  parse: 58.1, color: C.base,   note: '44.3% LFR · fair N=200' },
+          { method: 'DPO',         dlfr: 23.2, ned: 0.340, ppl: 113.2, parse: 44.0, color: C.dpo,    note: '2p b4 fair (68.4% LFR; fair re-eval, was +21.0%)' },
+          { method: 'SimPO',       dlfr: 29.4, ned: 0.370, ppl: 160.1, parse: 24.2, color: C.simpo,  note: '2p b4 β3γ0.5 v2fix (73.6% LFR)' },
+          { method: 'SFT',         dlfr: 1.7,  ned: 0.329, ppl: 97.2,  parse: 63.3, color: C.sft,    note: '2p b4 2ep' },
+          { method: 'GRPO single', dlfr: 22.6, ned: 0.250, ppl: 137.0, parse: 25.0, color: C.grpo_s, note: 'v2 g24 1ep (67.4% LFR; 25% parse⚠; beats g16 +11.0%, median PPL ok)' },
+          { method: 'GRPO multi',  dlfr: 22.6, ned: 0.353, ppl: 121.3, parse: 33.8, color: C.grpo_m, note: 'mv2 g16 v2fix 1ep' },
+          { method: 'GDPO',        dlfr: 18.7, ned: 0.372, ppl: 108.5, parse: 56.6, color: C.gdpo,   note: 'v6 ckpt-6000 0.75ep' },
         ]
       }
     }
@@ -232,36 +232,86 @@ const models = [
         baseLfr: 0.549,
         pending: '',
         best: [
-          { method: 'Base',        dlfr: 0.0,  ned: 0.297, ppl: 8.8,   color: C.base,   note: '~54.9% LFR · anchor base_metrics' },
-          { method: 'DPO',         dlfr: 0.3,  ned: 0.268, ppl: 8.4,   color: C.dpo,    note: '1p b4 2ep (55.2% LFR)' },
-          { method: 'SimPO',       dlfr: 7.0,  ned: 0.248, ppl: 9.1,   color: C.simpo,  note: '2p b4 β3γ0.5 (62.5% LFR)' },
-          { method: 'SFT',         dlfr: 0.8,  ned: 0.298, ppl: 8.5,   color: C.sft,    note: '2p b4 ml2048 200step (55.7% LFR)' },
-          { method: 'GRPO multi',  dlfr: 1.7,  ned: 0.264, ppl: 8.5,   color: C.grpo_m, note: 'mv2 g16 1ep (56.7% LFR)' },
-          { method: 'GDPO',        dlfr: 6.0,  ned: 0.186, ppl: 8.3,   color: C.gdpo,   note: 'v6 g16 1ep bs4 (60.8% LFR; NED 0.186 — most minimal edits)' },
+          { method: 'Base',        dlfr: 0.0, ned: 0.249, ppl: 6.9, parse: 88.0, color: C.base,   note: '~54.9% LFR · anchor base_metrics' },
+          { method: 'SimPO',       dlfr: 7.0, ned: 0.201, ppl: 7.4, parse: 66.0, color: C.simpo,  note: '2p b4 β3γ0.5 (62.5% LFR; β=2 tested at +4.6%)' },
+          { method: 'GDPO',        dlfr: 6.0, ned: 0.150, ppl: 6.5, parse: 67.5, color: C.gdpo,   note: 'v6 g16 1ep bs4 (60.8% LFR; NED 0.186 — most minimal edits)' },
+          { method: 'GRPO single', dlfr: 2.9, ned: 0.223, ppl: 6.9, parse: 82.1, color: C.grpo_s, note: 'v2 g16 1ep (57.7% LFR)' },
+          { method: 'DPO',         dlfr: 2.9, ned: 0.220, ppl: 7.0, parse: 76.2, color: C.dpo,    note: '2p b4 lr=1e-5 (57.9% LFR; 1p default lr only +0.3%)' },
+          { method: 'GRPO multi',  dlfr: 1.7, ned: 0.217, ppl: 6.8, parse: 85.2, color: C.grpo_m, note: 'mv2 g16 1ep (56.7% LFR)' },
+          { method: 'SFT',         dlfr: 0.8, ned: 0.250, ppl: 7.0, parse: 89.2, color: C.sft,    note: '2p b4 ml2048 200step (55.7% LFR)' },
         ]
       },
       'SNLI-Premise (N=200, fair-base)': {
         baseLfr: 0.630,
-        pending: 'GDPO parse rate 47% (607/1288 CFs) — high self-selection; model outputs only high-confidence flips.',
+        pending: '',
         best: [
-          { method: 'Base',        dlfr: 0.0,  ned: 0.314, ppl: 91.4,  color: C.base,   note: '63.0% LFR' },
-          { method: 'DPO',         dlfr: 6.6,  ned: 0.318, ppl: 83.1,  color: C.dpo,    note: '2p b4 2ep (69.4% LFR)' },
-          { method: 'SimPO',       dlfr: 21.5, ned: 0.421, ppl: 92.0,  color: C.simpo,  note: '2p b4 β3γ0.5 (84.0% LFR)' },
-          { method: 'SFT',         dlfr: 0.0,  ned: 0.321, ppl: 98.9,  color: C.sft,    note: '2p b16 1ep (63.1% LFR)' },
-          { method: 'GRPO multi',  dlfr: 15.0, ned: 0.311, ppl: 82.6,  color: C.grpo_m, note: 'mv2 g16 v2fix 1ep (78.0% LFR)' },
-          { method: 'GDPO',        dlfr: 26.2, ned: 0.361, ppl: 79.2,  color: C.gdpo,   note: 'v6 g16 1ep bs4 (89.6% LFR; best 14B result)' },
+          { method: 'Base',        dlfr:  0.0, ned: 0.295, ppl: 50.8, parse: 64.4, color: C.base,   note: '63.0% LFR' },
+          { method: 'GRPO multi',  dlfr: 29.8, ned: 0.386, ppl: 44.1, parse: 27.0, color: C.grpo_m, note: 'mv2 g16 fair 1ep (93.5% LFR; v2fix retrain only +15.0%)' },
+          { method: 'GDPO',        dlfr: 26.5, ned: 0.352, ppl: 53.4, parse: 29.0, color: C.gdpo,   note: 'v6 g16 fair 1ep (89.5% LFR)' },
+          { method: 'SimPO',       dlfr: 22.7, ned: 0.413, ppl: 50.5, parse: 68.8, color: C.simpo,  note: '2p b4 β2γ0.5 (85.7% LFR; β=2 marginally beats β=3 +21.5% here)' },
+          { method: 'GRPO single', dlfr: 22.7, ned: 0.336, ppl: 43.5, parse: 50.5, color: C.grpo_s, note: 'v2 g16 1ep (85.6% LFR)' },
+          { method: 'DPO',         dlfr: 15.6, ned: 0.362, ppl: 70.9, parse: 58.4, color: C.dpo,    note: '2p b4 lr=1e-5 2ep (78.7% LFR; +9pp over default lr)' },
+          { method: 'SFT',         dlfr:  0.0, ned: 0.306, ppl: 50.9, parse: 65.3, color: C.sft,    note: '2p b16 1ep (63.1% LFR)' },
         ]
       },
       'SNLI-Hypothesis (N=200, fair-base)': {
         baseLfr: 0.762,
         pending: '',
         best: [
-          { method: 'Base',        dlfr: 0.0,  ned: 0.487, ppl: 171.2, color: C.base,   note: '76.2% LFR' },
-          { method: 'DPO',         dlfr: 0.7,  ned: 0.467, ppl: 167.3, color: C.dpo,    note: '2p b4 2ep (76.7% LFR)' },
-          { method: 'SimPO',       dlfr: 13.7, ned: 0.426, ppl: 352.4, color: C.simpo,  note: '2p b4 β3γ0.5 (89.9% LFR)' },
-          { method: 'SFT',         dlfr: 3.9,  ned: 0.482, ppl: 186.9, color: C.sft,    note: '2p b4 2ep (80.2% LFR)' },
-          { method: 'GRPO multi',  dlfr: 9.2,  ned: 0.454, ppl: 242.6, color: C.grpo_m, note: 'mv2 g16 1ep (85.5% LFR)' },
-          { method: 'GDPO',        dlfr: 8.8,  ned: 0.439, ppl: 241.9, color: C.gdpo,   note: 'v6 g16 v2fix 1ep (85.0% LFR)' },
+          { method: 'Base',        dlfr:  0.0, ned: 0.507, ppl: 77.4,  parse: 61.8, color: C.base,   note: '76.2% LFR' },
+          { method: 'GRPO multi',  dlfr: 14.9, ned: 0.462, ppl: 126.5, parse: 29.2, color: C.grpo_m, note: 'mv2 g16 lr=2e-6 ckpt12800 ~80% (91.1% LFR; default lr only +9.2%)' },
+          { method: 'SimPO',       dlfr: 13.7, ned: 0.426, ppl: 95.1,  parse: 15.8, color: C.simpo,  note: '2p b4 β3γ0.5 (89.9% LFR; β=2 gives +11.4% with NED=0.398)' },
+          { method: 'GRPO single', dlfr: 11.6, ned: 0.467, ppl: 108.0, parse: 36.6, color: C.grpo_s, note: 'v2 g16 1ep (87.7% LFR; lr=2e-6 ckpt8700 only +4.2% — default lr better)' },
+          { method: 'GDPO',        dlfr:  8.8, ned: 0.452, ppl: 93.9,  parse: 42.8, color: C.gdpo,   note: 'v6 g16 v2fix 1ep (85.0% LFR)' },
+          { method: 'DPO',         dlfr:  6.8, ned: 0.471, ppl: 82.0,  parse: 47.7, color: C.dpo,    note: '2p b4 lr=1e-5 2ep (82.9% LFR; nearly 10× over default lr +0.7%)' },
+          { method: 'SFT',         dlfr:  3.9, ned: 0.500, ppl: 83.7,  parse: 70.1, color: C.sft,    note: '2p b4 2ep (80.2% LFR)' },
+        ]
+      }
+    }
+  },
+  {
+    id: 'llama31-8b',
+    displayName: 'Llama-3.1-8B-Instruct',
+    sortKey: 8,
+    compareShortLabel: 'Llama-8B',
+    datasets: {
+      'BoolQ (N=200, fair-base)': {
+        baseLfr: 0.537,
+        pending: '',
+        best: [
+          { method: 'Base',        dlfr:  0.0,  ned: 0.282, ppl: 13.0,  parse: 89.0, color: C.base,   note: '53.7% LFR · DPO anchor' },
+          { method: 'GDPO',        dlfr: 17.3,  ned: 0.348, ppl: 13.1,  parse: 91.7, color: C.gdpo,   note: 'v6 g16 bs8 H200 ckpt500 (71.0% LFR; ckpt700 +16.2%, full 1ep +16.4%)' },
+          { method: 'GRPO multi',  dlfr: 13.2,  ned: 0.326, ppl: 15.5,  parse: 89.2, color: C.grpo_m, note: 'mv2 g16 mcl768 ckpt1600 (66.9% LFR; reward healthy until step 1601, collapses at 1701)' },
+          { method: 'DPO',         dlfr: 11.5,  ned: 0.101, ppl: 8.7,   parse: 84.2, color: C.dpo,    note: '2p lr=1e-5 (66.0% LFR; NED 0.133 notably low — minimal edits)' },
+          { method: 'SimPO',       dlfr:  9.5,  ned: 0.083, ppl:  8.5,  parse: 70.3, color: C.simpo,  note: '2p b4 β2γ0.5 lr=2e-6 (63.5% LFR; stable retraining fixed CUDA divergence)' },
+          { method: 'SFT',         dlfr:  0.3,  ned: 0.279, ppl: 67.4,  parse: 83.8, color: C.sft,    note: '2p 200step (53.9% LFR)' },
+          { method: 'GRPO single', dlfr:  6.7,  ned: 0.221, ppl: 12.3,  parse: 86.5, color: C.grpo_s, note: 'v2 g16 mcl768 ckpt1800 ~22% (+6.7% peak; collapses to +2.6% by ckpt3500); mcl768 fix that helped multi also helps single' },
+        ]
+      },
+      'SNLI-Premise (N=200, fair-base)': {
+        baseLfr: 0.432,
+        pending: '',
+        best: [
+          { method: 'Base',        dlfr:  0.0,  ned: 0.426, ppl: 108.0, parse: 88.8, color: C.base,   note: '43.2% LFR' },
+          { method: 'GRPO single', dlfr: 32.5,  ned: 0.290, ppl: 87.6,  parse: 56.0, color: C.grpo_s, note: 'v2 g16 ckpt7500 ~47% (74.6% LFR; fair; _fair rerun +31.3% — stochasticity)' },
+          { method: 'GRPO multi',  dlfr: 29.2,  ned: 0.331, ppl: 138.8, parse: 78.8, color: C.grpo_m, note: 'GRPO-fair mv2 ckpt11200 ~70% (71.6% LFR; fair; ckpt7000 +29.0%, ckpt4500 +28.0%)' },
+          { method: 'SimPO',       dlfr: 18.6,  ned: 0.423, ppl: 89.9,  parse: 94.2, color: C.simpo,  note: '2p b4 β3γ0.5 lr=2e-6 (62.2% LFR)' },
+          { method: 'GDPO',        dlfr: 11.4,  ned: 0.463, ppl: 107.5, parse: 87.2, color: C.gdpo,   note: 'v6 g16 bs8 H200 ckpt500 (54.4% LFR; early stopping beats full 1ep +10.6%)' },
+          { method: 'SFT',         dlfr:  2.5,  ned: 0.468, ppl: 102.9, parse: 80.8, color: C.sft,    note: '2p 200step (45.7% LFR)' },
+          { method: 'DPO',         dlfr:  2.4,  ned: 0.411, ppl: 96.9,  parse: 84.0, color: C.dpo,    note: '2p b4 lr2e6 (45.6% LFR; 84% parse; the proven 2pair recipe beats 1p +0.4%)' },
+        ]
+      },
+      'SNLI-Hypothesis (N=200, fair-base)': {
+        baseLfr: 0.564,
+        pending: 'Only cell where online RL decisively beats offline: GRPO multi +9.6% clears base while DPO/SimPO/SFT plateau at base (best healthy ≤ +0.7%) — weak self-generated preference contrast at high base LFR (56.4%).',
+        best: [
+          { method: 'Base',        dlfr:  0.0,  ned: 0.543, ppl: 156.9, parse: 89.1, color: C.base,   note: '56.4% LFR (anchor)' },
+          { method: 'GRPO multi',  dlfr:  9.6,  ned: 0.405, ppl: 183.4, parse: 66.0, color: C.grpo_m, note: 'mv2 g16 ckpt14900 ~93% (67.3% LFR; fair confirmed)' },
+          { method: 'GDPO',        dlfr:  6.2,  ned: 0.559, ppl: 160.6, parse: 66.5, color: C.gdpo,   note: 'v6 g16 bs8 ckpt1000 (62.4% LFR; fair)' },
+          { method: 'GRPO single', dlfr:  3.4,  ned: 0.463, ppl: 148.5, parse: 83.5, color: C.grpo_s, note: 'v2 g16 ckpt6000 ~37% (59.7% LFR; fair; same anchor as _fair run — higher-scoring variant used)' },
+          { method: 'DPO',         dlfr: -0.8,  ned: 0.552, ppl: 150.2, parse: 100.0, color: C.dpo,    note: '2p b4 lr2e6 ckpt100 (55.6% LFR; best of full ckpt sweep — every ckpt ≤ base; offline ceiling)' },
+          { method: 'SimPO',       dlfr:  0.7,  ned: 0.500, ppl: 214.3, parse: 70.0, color: C.simpo,  note: '2p b4 β3γ0.5 lr2e6 (57.5% LFR; best non-degraded; β2 +11.6% is 4.6%-parse artifact)' },
+          { method: 'SFT',         dlfr:  0.6,  ned: 0.577, ppl: 139.0, parse: 80.0, color: C.sft,    note: '2p ckpt100 early-stop (57.0% LFR; clears base; full 200step was −1.4%)' },
         ]
       }
     }
@@ -274,38 +324,48 @@ const models = [
     datasets: {
       'BoolQ (N=200, fair-base)': {
         baseLfr: 0.305,
-        pending: 'SimPO/SFT/GRPO/GDPO evals queued. DPO +0.0% — 3B cannot learn BoolQ CFs from DPO pairs. GDPO 5ep retraining in progress.',
+        pending: '',
         best: [
-          { method: 'Base', dlfr: 0.0, ned: 0.323, ppl: 15.5, color: C.base, note: '30.5% LFR · DPO anchor base_metrics' },
-          { method: 'DPO',  dlfr: 0.0, ned: 0.211, ppl: 13.1, color: C.dpo,  note: '1p b4 200step (30.5% LFR; no improvement)' },
+          { method: 'Base',        dlfr:  0.0,  ned: 0.232, ppl: 10.8, parse: 89.3, color: C.base,   note: '30.5% LFR · DPO anchor' },
+          { method: 'GRPO single', dlfr: 10.4,  ned: 0.090, ppl: 11.4, parse: 55.4, color: C.grpo_s, note: 'v2 g16 lr=1e-5 1ep (41.6% LFR; fair2 run; default lr +5.6%)' },
+          { method: 'GRPO multi',  dlfr:  7.6,  ned: 0.089, ppl: 11.6, parse: 54.0, color: C.grpo_m, note: 'mv2 g16 lr=1e-5 1ep (38.6% LFR; +1.6pp over default lr; NED 0.124 — very minimal edits)' },
+          { method: 'SimPO',       dlfr:  6.1,  ned: 0.144, ppl: 14.0, parse: 73.9, color: C.simpo,  note: '2p b4 β2γ0.5 (37.1% LFR; original fair run; β=3 collapses to −13%)' },
+          { method: 'GDPO',        dlfr:  1.1,  ned: 0.213, ppl: 10.7, parse: 90.3, color: C.gdpo,   note: 'v6 g16 ckpt100 (31.3% LFR; ~0.3pp unfair; full 1ep −0.1%)' },
+          { method: 'SFT',         dlfr:  1.0,  ned: 0.271, ppl: 11.0, parse: 93.0, color: C.sft,    note: '2p b4 200step (31.5% LFR)' },
+          { method: 'DPO',         dlfr:  0.0,  ned: 0.145, ppl: 9.6,  parse: 89.0, color: C.dpo,    note: '1p b4 200step (30.5% LFR; 2ep fair eval −1.1% — shorter training is better)' },
         ]
       },
       'SNLI-Premise (N=200, fair-base)': {
         baseLfr: 0.326,
-        pending: 'GRPO multi pending. GRPO single training.',
+        pending: '',
         best: [
-          { method: 'Base',  dlfr: 0.0,  ned: 0.220, ppl: 86.9,  color: C.base,  note: '32.6% LFR · DPO anchor base_metrics' },
-          { method: 'SimPO', dlfr: 25.5, ned: 0.309, ppl: 95.1,  color: C.simpo, note: '2p b4 β3γ0.5 (59.9% LFR)' },
-          { method: 'GDPO',  dlfr: 17.5, ned: 0.269, ppl: 76.3,  color: C.gdpo,  note: 'v6 g16 bs8 1ep (50.6% LFR)' },
-          { method: 'DPO',   dlfr: 7.9,  ned: 0.228, ppl: 83.1,  color: C.dpo,   note: '1p b4 200step (40.4% LFR)' },
-          { method: 'SFT',   dlfr: 5.2,  ned: 0.229, ppl: 86.5,  color: C.sft,   note: '2p b4 200step (37.7% LFR)' },
+          { method: 'Base',        dlfr:  0.0, ned: 0.220, ppl: 47.0, parse: 42.6, color: C.base,   note: '32.6% LFR · DPO anchor' },
+          { method: 'GRPO multi',  dlfr: 25.2, ned: 0.333, ppl: 72.9, parse: 33.2, color: C.grpo_m, note: 'mv2 g16 lr=1e-5 1ep (58.8% LFR; canonical fair — ties SimPO)' },
+          { method: 'SimPO',       dlfr: 25.5, ned: 0.291, ppl: 97.1, parse: 42.3, color: C.simpo,  note: '2p b4 β3γ0.5 (58.5% LFR; best fair: fair2 run)' },
+          { method: 'GDPO',        dlfr: 18.5, ned: 0.260, ppl: 76.9, parse: 47.4, color: C.gdpo,   note: 'v6 g16 bs8 1ep (50.8% LFR; best fair run)' },
+          { method: 'GRPO single', dlfr: 27.7, ned: 0.346, ppl: 66.2, parse: 34.3, color: C.grpo_s, note: 'v2 g16 lr=1e-5 1ep (61.1% LFR; +10.8pp over default lr +16.9%)' },
+          { method: 'DPO',         dlfr: 10.6, ned: 0.254, ppl: 82.3, parse: 48.9, color: C.dpo,    note: '2p b4 2ep lr=1e-5 (44.6% LFR; canonical fair)' },
+          { method: 'SFT',         dlfr:  5.2, ned: 0.229, ppl: 47.0, parse: 47.0, color: C.sft,    note: '2p b4 200step (37.7% LFR)' },
         ]
       },
       'SNLI-Hypothesis (N=200, fair-base)': {
         baseLfr: 0.481,
-        pending: 'GRPO multi pending. GRPO single training. SimPO PPL=2672 excluded (>650 cap).',
+        pending: '',
         best: [
-          { method: 'Base', dlfr: 0.0,  ned: 0.387, ppl: 153.0, color: C.base,  note: '48.1% LFR · DPO anchor base_metrics' },
-          { method: 'GDPO', dlfr: 13.6, ned: 0.409, ppl: 203.9, color: C.gdpo,  note: 'v6 g16 bs8 1ep (61.9% LFR; best 3B SNLI-H)' },
-          { method: 'SFT',  dlfr: 3.1,  ned: 0.396, ppl: 174.5, color: C.sft,   note: '2p b4 200step (51.2% LFR)' },
-          { method: 'DPO',  dlfr: 1.9,  ned: 0.374, ppl: 131.6, color: C.dpo,   note: '1p b4 200step (50.0% LFR)' },
+          { method: 'Base',        dlfr:  0.0, ned: 0.440, ppl: 69.0, parse: 45.2, color: C.base,   note: '48.1% LFR · DPO anchor' },
+          { method: 'GDPO',        dlfr: 15.2, ned: 0.496, ppl: 68.3, parse: 46.0, color: C.gdpo,   note: 'v6 g16 bs8 ~0.75ep/ckpt1500 fair (63.7% LFR; best 3B SNLI-H)' },
+          { method: 'GRPO multi',  dlfr:  7.3, ned: 0.375, ppl: 100.7, parse: 32.5, color: C.grpo_m, note: 'mv2 g16 lr=1e-5 1ep (56.7% LFR; +0.2pp over default lr +7.1%)' },
+          { method: 'DPO',         dlfr:  7.3, ned: 0.415, ppl:  65.4, parse: 39.4, color: C.dpo,    note: '2p b4 2ep lr=1e-5 (55.8% LFR; canonical fair)' },
+          { method: 'SimPO',       dlfr:  7.2, ned: 0.379, ppl:  92.8, parse: 36.8, color: C.simpo,  note: '2p b4 β3γ0.5 (55.3% LFR; fair2 run best; β=2 fair gives +5.1%)' },
+          { method: 'GRPO single', dlfr:  6.3, ned: 0.348, ppl: 80.9, parse: 30.9, color: C.grpo_s, note: 'v2 g16 lr=1e-5 1ep (54.0% LFR; default lr fair: +2.3%)' },
+          { method: 'SFT',         dlfr:  3.1, ned: 0.459, ppl: 67.9, parse: 46.9, color: C.sft,    note: '2p b4 200step (51.2% LFR)' },
         ]
       }
     }
   }
 ];
 
-document.title = 'CF Generation — Best Results (7B, 14B & 3B)';
+document.title = 'CF Generation — Best Results (7B, 14B, 3B, Llama-8B)';
 
 Chart.defaults.color = '#6b7394';
 Chart.defaults.font.family = "'DM Sans', sans-serif";
@@ -340,10 +400,9 @@ function renderCompareSection(parent) {
   const lead = document.createElement('p');
   lead.className = 'compare-lead';
   lead.innerHTML =
-    'Grouped bars: <strong>absolute LFR (%)</strong> (Base = untuned; tuned = same fair-N + PPL rules as below). ' +
-    'Second row: <strong>&Delta;LFR</strong> vs that model&rsquo;s base. ' +
-    'Models ordered by <code>sortKey</code> (smallest &rarr; largest); add rows with <code>compareShortLabel</code> for compact axes. ' +
-    'Missing bars = method not in the matrix yet for that checkpoint.';
+    'Top row: <strong>absolute LFR (%)</strong> per method (Base = untuned). Bottom row: <strong>&Delta;LFR</strong> vs each model&rsquo;s own fair base. ' +
+    'All numbers are fair N=200 — each adapter re-uses its model&rsquo;s frozen base counterfactual set; NED and PPL are medians over non-trivial edits. ' +
+    '&Delta;LFR is within-run (each run re-judges its own base, ±1pp drift on identical base CFs).';
   section.appendChild(lead);
 
   const mkGrid = () => {
@@ -502,7 +561,7 @@ function renderDatasetBlock(dsName, ds, parent) {
   section.appendChild(title);
 
   const tableWrap = document.createElement('div');
-  let html = '<table class="best-table"><tr><th>Method</th><th>\u0394LFR</th><th>NED</th><th>PPL</th><th>LFR/NED</th><th>Config</th></tr>';
+  let html = '<table class="best-table"><tr><th>Method</th><th>\u0394LFR</th><th>Parse%</th><th>NED</th><th>PPL</th><th>LFR/NED</th><th>Config</th></tr>';
   const tuned = ds.best.filter(d => d.method !== 'Base');
   const maxDlfrTuned = Math.max(...tuned.map(d => d.dlfr));
   const baseLfr = ds.baseLfr;
@@ -515,9 +574,13 @@ function renderDatasetBlock(dsName, ds, parent) {
     const lfrNed = lfrNedForRow(d, baseLfr).toFixed(2);
     const badge = isBest ? '<span class="best-label">BEST</span>' : '';
     const dlfrColor = isBase ? 'var(--muted)' : (d.dlfr >= 0 ? '#3ecf8e' : '#e8594f');
+    const parseStr = d.parse == null ? '—' : d.parse.toFixed(1) + '%';
+    const parseColor = d.parse == null ? 'var(--muted)' : d.parse < 10 ? '#e8594f' : d.parse < 60 ? '#f5a623' : 'var(--muted)';
+    const parseFlag = d.parse == null ? '' : d.parse < 10 ? ' \u26d4' : d.parse < 60 ? ' \u26a0' : '';
     html += `<tr class="${isBase ? 'base-row' : ''}">
       <td><span style="color:${d.color};font-weight:600">${d.method}</span></td>
       <td style="color:${dlfrColor}" class="${isBest ? 'highlight' : ''}">${dlfrStr}${badge}</td>
+      <td style="color:${parseColor};font-family:'Space Mono',monospace;font-size:0.78rem">${parseStr}${parseFlag}</td>
       <td>${nedStr}</td>
       <td>${pplStr}</td>
       <td>${lfrNed}</td>

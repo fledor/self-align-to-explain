@@ -2,20 +2,20 @@
 
 Comparing post-training self-alignment methods for improving counterfactual generation quality. **Primary results** below fine-tune **Qwen/Qwen2.5-7B-Instruct** using QLoRA (4-bit, LoRA r=32, alpha=16, lr=5e-6) on three NLI/classification datasets. Scale-ups to **Qwen2.5-14B-Instruct** and **Qwen2.5-3B-Instruct** are fully model-native (see [RESULTS.md](RESULTS.md)). Use `submit_model_pipeline.sh` / `submit_3b_pipeline.sh` to switch models.
 
-**Last updated**: April 21, 2026
+**Last updated**: Jun 22, 2026. **Paper-readiness pass**: full 12-cell × 6-method matrix (4 models × 3 datasets) is fair N=200 with medians for NED (NED>0) and PPL throughout. New: **7B BoolQ GRPO lr=1e-5** lifts single +7.7%→**+21.2%** and multi +9.8%→**+18.8%** (same lr lift as 3B); **Llama SNLI-P DPO 2pair lr=2e-6** +2.4% (clears base); **3B BoolQ DPO 2pair** −0.6% (confirms 3B can't learn BoolQ offline). Only one below-base cell remains: **Llama SNLI-H DPO −0.8%** (every config + full checkpoint sweep ≤ base; offline plateau where online RL wins — GRPO multi +9.6%). Llama SNLI-H GRPO multi lr=1e-5 checkpoint eval sweep running (jobs 3114894–3114897).
 
 ### Qwen2.5-14B-Instruct scale-up
 
-- **14B matrix complete** (5 methods × 3 datasets, all fair N=200). Full results: [RESULTS.md — 14B](RESULTS.md#qwen25-14b-instruct). **GRPO single (v2 g16)** training for all 3 datasets (**2819415–17**, H200).
+- **14B matrix complete** (6 methods × 3 datasets, all fair N=200). Full results: [RESULTS.md — 14B](RESULTS.md#qwen25-14b-instruct).
 - **Fair base:** BoolQ → `evaluation_boolq_200s_dpo_1pair_b4_2ep_qwen25_14b/`, SNLI-P → `evaluation_snli_premise_200s_grpo_mv2_g16_qwen25_14b_v2fix/`, SNLI-H → `evaluation_snli_hypothesis_200s_gdpo_v6_qwen25_14b_v2fix/`. Script: `run_eval_14b_fair.sh`.
-- **Headline 14B fair N=200:** BoolQ best **SimPO β3γ0.5** (+7.0%) and **GDPO v6** (+6.0%); SNLI-P best **GDPO v6** (**+26.2%**, best overall); SNLI-H best **SimPO** (+13.7%), then **GRPO** (+9.2%) and **GDPO** (+8.8%).
+- **Headline 14B fair N=200:** BoolQ best **SimPO** (+7.0%), **GDPO** (+6.0%), **GRPO single** (+2.9%); SNLI-P best **GRPO multi** (**+29.8%** fair, original mv2 1ep), **GDPO v6** (+26.5%), **SimPO**/**GRPO single** (+22.7% ea.; the v2fix GRPO-multi retrain only reached +15.0%); SNLI-H best **GRPO multi** (+14.9%), **SimPO** (+13.7%), **GRPO single** (+11.6%).
 - **Charts:** [results_charts.html](results_charts.html).
 
 ### Qwen2.5-3B-Instruct scale-up
 
 - **3B pipeline:** `submit_3b_pipeline.sh`, evals via `run_eval_3b_fair.sh`. Fair anchors: BoolQ → `evaluation_boolq_200s_dpo_1pair_qwen25_3b/`, SNLI-P/H analogous.
-- **Headline 3B results:** SNLI-P best **SimPO** (**+25.5%**), **GDPO** (**+17.5%**); SNLI-H best **GDPO** (**+13.6%**); BoolQ **DPO +0.0%** — 3B cannot learn BoolQ CFs from DPO pairs. See [RESULTS.md — 3B](RESULTS.md#qwen25-3b-instruct).
-- **Pending:** BoolQ SimPO/SFT/GRPO evals (**2819352–54**); SNLI-P/H GRPO multi evals (**2819355–56**); GRPO single training (**2819412–14**); GDPO BoolQ 5ep retraining (**2819410**).
+- **3B matrix complete** (6 methods × 3 datasets, all fair N=200). Hyperparam LR variants now also complete. See [RESULTS.md — 3B](RESULTS.md#qwen25-3b-instruct).
+- **Headline 3B results:** SNLI-P best **GRPO single lr=1e-5** (**+27.7%**) > **SimPO** (+25.5%) ≈ **GRPO multi lr=1e-5** (+25.2%); **GDPO** (+18.5%); SNLI-H best **GDPO** (**+15.2%** fair), **DPO/GRPO multi** (+7.3% ea.), **SimPO β=3** (+6.8%); BoolQ best **GRPO single lr=1e-5** (+10.4%), **GRPO multi lr=1e-5** (+7.6%), **SimPO β=2** (+6.1%). **Key finding**: lr=1e-5 dramatically helps 3B GRPO — +10.8pp on SNLI-P single, +1.6pp on BoolQ multi vs default lr.
 
 ### KTO (Kahneman-Tversky Optimization)
 
@@ -335,6 +335,19 @@ Runs submitted: SNLI-P (train 2714737, eval 2714738), SNLI-H (train 2714739, eva
 
 Note: GRPO-fair SNLI-P training timed out at epoch 0.995 (checkpoint-15900 evaluated). GRPO-fair BoolQ PPL was NaN (generation quality issue), but LFR confirms no meaningful improvement.
 
+### GDPO batch size across model scales
+
+GDPO's normalization operates within each group of `num_generations=16` completions per prompt, so `per_device_batch_size` only affects the number of simultaneous groups per gradient step (gradient diversity), not the per-reward normalization quality directly. Nevertheless, for consistency the following batch sizes were used:
+
+| Model | BATCH_SIZE | gen_batch | Partition | Notes |
+|-------|:----------:|:---------:|-----------|-------|
+| Qwen 7B | 8 | 128 (8×16) | RTXA6000 | Reference config |
+| Qwen 3B | 8 | 128 (8×16) | RTXA6000 | Same as 7B |
+| Qwen 14B | **4** | 64 (4×16) | H200 | Model too large for bs=8 on any available 48 GB GPU |
+| Llama 3.1 8B | 8 | 128 (8×16) | H200 / A100-80GB | OOM at bs=8 on RTXA6000 (needed 44.6 GB, card has 44.4 GB); resubmitted on H200/A100-80GB for parity with 7B/3B |
+
+**Comparison fairness**: Llama 8B ↔ 7B/3B GDPO comparisons are fully fair (same bs=8). Qwen 14B uses bs=4 due to model size constraints; comparisons involving 14B GDPO should note this. The practical impact is expected to be small — 14B at bs=4 achieved the best GDPO result overall (+26.2% on SNLI-P).
+
 ---
 
 ## 7. Evaluation Methodology
@@ -342,6 +355,7 @@ Note: GRPO-fair SNLI-P training timed out at epoch 0.995 (checkpoint-15900 evalu
 - **Fair-base comparison**: base model counterfactuals are generated once and reused across all model evaluations via `--base_eval_dir`, ensuring ΔLFR differences reflect the fine-tuned model's quality rather than base model generation variance
 - **Standard evaluation**: 200 validation samples, 10 CFs per sample, fair-base reused (previously 100; standardized to 200 for lower variance)
 - **LFR/NED efficiency metric**: label flip rate divided by normalized edit distance, rewarding methods that achieve high flip rates with minimal edits (higher = more efficient). Reported in N=200 eval reports.
+- **NED aggregation (updated)**: Best-result N=200 NED values now use **median NED over CFs with NED > 0** (identical copies excluded — they are not counterfactuals by definition, and their inclusion inflates the LFR denominator unfairly; see discussion in `RESULTS.md` and RGF, ACL 2022). Historical/secondary entries still report mean NED from `eval_summary.avg_norm_edit_distance`. Note: NED=0 entries **are still counted in the LFR denominator** — they represent a genuine model failure to produce an edit.
 - **Base model as judge**: the un-fine-tuned base model classifies all counterfactuals (both base-generated and fine-tuned-generated) to determine label flips
 - **Evaluation variance**: base LFR varies 2-5pp across independent runs; differences below ~5pp should be treated cautiously
 
@@ -380,13 +394,13 @@ For the **14B-native BoolQ DPO** path, CF generation, CF evaluation, pair constr
 - **14B pipeline restructured (April 7)**: All 14B runs now fully model-native (no 7B data). Prior 14B DPO (7B pairs) invalidated. `submit_model_pipeline.sh` created for easy model switching.
 
 ### Key findings
-- **Each method excels on different datasets**: GRPO mv2 on SNLI-P (+27.5%), **sigmoid DPO** on BoolQ (+10.5%) and best **sigmoid** offline on SNLI-H (+21.0%). **SimPO** is a strong second on BoolQ (+9.8%) and on SNLI-H can exceed DPO/GRPO on **ΔLFR** (up to **+29.7%**) but **PPL varies wildly** by (β, γ) — treat SimPO as a **frontier** method, not a single number
-- **GDPO v6 beats GRPO on SNLI-H (at best checkpoint)**: GDPO v6 ckpt-6000 +18.7% vs GRPO mv2 +15.1% — still the best **GDPO** tradeoff vs GRPO when NED/PPL matter; raw ΔLFR alone is exceeded by SimPO (+26.4%) and by **GDPO without KL** (+37.1%) at unacceptable PPL
-- **GRPO-fair confirms tricks are GDPO-specific**: Adding conditioned rewards, asymmetric clipping, and KL penalty to GRPO hurts it by 2-15pp across all datasets. The stabilization techniques are not universally beneficial — they specifically complement GDPO's per-reward normalization
-- **LR is dominant for GDPO**: v5 +1.7% at lr=1e-6 vs v6 +15.7% at lr=5e-6
-- **Conditioned rewards + KL > more groups**: v6 8 groups +15.7% > paper-match 32 groups +7.6%
-- **BoolQ training truncation is NOT the bottleneck**: SFT ml2048 +1.8%, DPO 2pair ml2048 +8.5%, DPO 1pair ml2048 +3.8%, GDPO v6 mcl1024 +0.3%, GRPO mcl1024 −29.9%. Longer sequences consistently hurt or don't help
-- **Early stopping is dataset-dependent**: GDPO peaks at 0.25ep on SNLI-P, 0.75ep on SNLI-H; GRPO at 0.5ep on SNLI-P
+- **Each method excels on different datasets**: GRPO mv2 on SNLI-P (+27.5%), **sigmoid DPO** on BoolQ (+10.5%) and best offline on SNLI-H (+21.0%). **SimPO** is a strong second on BoolQ (+9.8%) and on SNLI-H can exceed DPO/GRPO on **ΔLFR** (up to **+29.7%**) but **PPL varies wildly** by (β, γ).
+- **GDPO v6 beats GRPO on SNLI-H (at best checkpoint)**: GDPO v6 ckpt-6000 +18.7% vs GRPO mv2 +15.1% — still the best **GDPO** tradeoff vs GRPO when NED/PPL matter.
+- **LR is dominant for both GDPO and GRPO multi**: GDPO v5 +1.7% at lr=1e-6 vs v6 +15.7% at lr=5e-6. **3B GRPO multi SNLI-P: +4.9% at default lr=5e-6 vs +25.0% at lr=1e-5 (+20pp)** — same model, same data, different LR. Optimal LR is scale-dependent: higher for small models, lower for large.
+- **SimPO β sensitivity is scale-dependent**: β=2 fixes 3B BoolQ collapse (−13% → +6%) and helps SNLI-H slightly, but hurts 14B (β=3 remains better). β=2 also fixes Llama 8B SNLI-H collapse (−15.7% → +7.2%).
+- **GRPO-fair confirms tricks are GDPO-specific**: Adding conditioned rewards, asymmetric clipping, and KL penalty to GRPO hurts it by 2-15pp. Specifically complement GDPO's per-reward normalization.
+- **Early stopping is dataset-dependent**: GDPO peaks at 0.25ep on SNLI-P, 0.75ep on SNLI-H; GRPO at 0.5ep on SNLI-P.
+- **Llama 8B: GDPO leads (+16.4% BoolQ, +10.7% SNLI-P)**: GDPO is the best-performing method for Llama 8B so far. DPO was suboptimal at lr=5e-6 and used wrong loss_type flag — proper lr=1e-5 sigmoid reruns in progress.
 
 ### DPO Variant Results (completed)
 
@@ -414,7 +428,48 @@ Compared to **peak** GDPO v6 (+18.7% at ~0.75ep), these are **full-epoch** check
 
 ### Running / Pending
 
-**14B (complete as of April 21):** All 5 methods × 3 datasets evaluated. GRPO single (v2 g16) training for BoolQ/SNLI-P/SNLI-H (**2819415–17**, H200). Evals to follow on completion via `run_eval_14b_fair.sh`.
+**All Qwen models complete (as of May 4):** 7B, 14B, and 3B fully evaluated. Key hyperparam variants complete: 3B GRPO multi lr=1e-5 (+25.0% SNLI-P), 3B SimPO β=2, 14B SimPO β=2. 14B DPO lr=2e-6 and 14B GRPO lr=2e-6 pending (resubmitted with sigmoid fix).
+
+**Bug fix — DPO LOSS_TYPE=sigmoid (May 4):** All jobs submitted with `LOSS_TYPE=dpo` were silently failing — `train_dpo.py` accepts `sigmoid` not `dpo`. 7 affected jobs (Llama DPO lr=1e-5 all variants, 14B DPO lr=2e-6) resubmitted. Previous Llama DPO results (lr=5e-6) used `sigmoid` implicitly and are unaffected.
+
+**SDPA attention (May 4):** `attn_implementation` changed from `"eager"` to `"sdpa"` in all training/eval scripts. This removes the naive O(n²) attention and uses PyTorch's fused CUDA kernels — meaningful speedup for GRPO/GDPO generation. No `flash_attn` package needed.
+
+**Llama 3.1 8B (in progress — May 4):** DPO/SFT/GDPO complete. SimPO β=3 collapsed on all datasets; β=2 fixes SNLI-H (+7.2%) and BoolQ/SNLI-P evals resubmitted (2888681–82). GRPO training resumed on A100-80GB.
+
+| Method | Dataset | Train status | Eval job |
+|--------|---------|-------------|----------|
+| DPO (anchor) | BoolQ / SNLI-P / SNLI-H | done ✓ | **2859764–66** (RUNNING — generates anchor) |
+| SFT | BoolQ / SNLI-P / SNLI-H | done ✓ | **2860174–76** (dep: 2859764–66) |
+| SimPO β3γ0.5 | BoolQ / SNLI-P / SNLI-H | done ✓ | **2860177–79** (dep: 2859764–66) |
+| GRPO multi (mv2 g16) | BoolQ / SNLI-P / SNLI-H | resuming **2859767–69** | **2860180–82** (dep: anchors + resumes) |
+| GDPO v6 (bs=8 H200) | BoolQ / SNLI-P / SNLI-H | training **2859808–10** | **2860183–85** (dep: anchors + training) |
+| GRPO single (v2 g16) | BoolQ / SNLI-P / SNLI-H | TIMEOUT; BoolQ resumed **2887432** | BoolQ eval **2887445** (dep: 2887432); SNLI partial-epoch evals **2887440–41** |
+| GRPO multi (BoolQ resume) | BoolQ | TIMEOUT; resumed **2887431** | BoolQ eval **2887444** (dep: 2887431) |
+| SimPO β3γ0.5 BoolQ/SNLI-P | — | done ✓ (model exists) | FAILED (CUDA error); retried **2887442–43** |
+
+**Hyperparameter sensitivity study (results in May 4):** Groups A–F complete. Group G still running (resumes submitted).
+
+Key findings (complete):
+- **Group B**: β=2 completely fixes 3B SimPO BoolQ collapse (+6.0% vs −13.0% with β=3)
+- **Group C**: 0.75ep is optimal for 3B GDPO SNLI-H; 14B GDPO converges by 0.5ep
+- **Group D**: 3B GRPO needs full epoch — 0.25ep/0.5ep barely improve
+- **Group E**: 14B SimPO β=2 slightly worse than β=3 (scale-dependent — β=2 only helps at 3B)
+- **Group F**: lr=1e-5 strongly improves 3B DPO on SNLI (+11.5% vs +7.2% SNLI-P; +6.3% vs +2.0% SNLI-H); lr=2e-6 hurts 14B DPO; **lr=1e-5 for 3B GRPO multi SNLI-P: +25.0% vs +4.9% default (+20pp!) — ties SimPO as best 3B SNLI-P**
+- **Group G**: 3B GRPO lr=2e-6 SNLI-P: +8.6% (improves over default +4.9% but not as good as lr=1e-5 +25.0%); 14B still running
+
+**Llama 8B hyperparam results (May 4):**
+- **SimPO β=2 SNLI-H: +7.2%** — fixes β=3 collapse (−15.7%); now best Llama SNLI-H method
+- **GDPO ckpt300 BoolQ: +14.5%** (median PPL 13.7) — slightly below full 1ep (+16.4%); 1ep remains best
+- DPO lr=1e-5 submitted (sigmoid fix needed — see below); results pending
+
+**Hyperparameter sensitivity study (submitted April 29):** 30 jobs queued to test whether 7B sweet spots generalize across scales.
+- **Group A** — 3B DPO full epochs (200step → 2ep): BoolQ 1pair, SNLI-P/H 2pair (trains **2859875–77**, evals **2859893–95**)
+- **Group B** — 3B SimPO softer margin (β=3 → β=2, γ=0.5): BoolQ + SNLI-H (trains **2859878–79**, evals **2859896–97**)
+- **Group C** — GDPO early-stopping at 3B and 14B (eval-only): 3B GDPO SNLI-P ckpt-500/1000, SNLI-H ckpt-1000/1500; 14B GDPO SNLI-H ckpt-1000/1500 (**2859867–72**)
+- **Group D** — 3B GRPO multi early-stopping on SNLI-P (eval-only): ckpt-4000/8000 (**2859873–74**)
+- **Group E** — 14B SimPO softer margin (β=2, γ=0.5) on SNLI-H (train **2859880**, eval **2859898**)
+- **Group F** — LR sensitivity: 3B DPO lr=1e-5 SNLI-P/H, 14B DPO lr=2e-6 SNLI-H, 3B GRPO multi lr=1e-5 SNLI-P (trains **2859881–84**, evals **2859899–2859902**)
+- **Group G** — GRPO multi lr=2e-6 to test if lower lr recovers multi's gap vs single: 3B SNLI-P, 14B SNLI-P, 14B SNLI-H (trains **2860143–45**, evals **2860146–48**)
 
 **7B v2fix re-runs** (April 7–11): trains **2765018** / **2765019** and evals **2771529** / **2771530** / **2771568** / **2771570** / **2773355**–**2773358** are **completed** — see [RESULTS.md](RESULTS.md). **7B GRPO BoolQ v2fix** fair eval **2782111** completed (`evaluation_boolq_200s_grpo_mv2_g16_v2fix/`); headline **−28.3%** ΔLFR — likely **policy collapse** after long training; see [RESULTS.md](RESULTS.md) BoolQ table and job note.
 
@@ -520,3 +575,134 @@ All three training scripts default to `lora_r=32, lora_alpha=16`, giving a scali
 ### Additional observation: format_reward has zero variance
 
 Training logs show `format_reward=0.000±0.000` in nearly every GDPO step — all completions produce valid format, so this reward contributes no learning signal. Consider removing it from the GDPO reward function list to reduce overhead (low priority).
+
+---
+
+## Per-Model Result Notes
+
+Notes on each model/dataset combination — what was tried, what worked, and what to note.
+
+### Qwen2.5-7B-Instruct
+
+**BoolQ**: `GRPO mv2 g16 v2fix` (full 1ep, fair) shows **−28.3%** ΔLFR — likely policy collapse after long GRPO training. Compare only to short-run (~0.25ep) GRPO rows. All other methods positive.
+
+### Qwen2.5-3B-Instruct
+
+**BoolQ**: DPO +0.0% — 3B cannot learn BoolQ CFs from DPO pairs alone; 2ep DPO fair eval confirms −1.1% (more training hurts). SimPO β=3 collapses on 3B (−13.0%), β=2 gives modest +3.5%. GRPO single lr=1e-5 nominally +10.2% but ⚠ 22% of CFs have NED=0.000 (identical text, no edit); GRPO multi at +6.0% with NED=0.234 is more reliable — higher lr causes degenerate copy-paste outputs. GDPO: ckpt100 (+1.1%) marginally better than full 1ep (−0.1%), base_LFR 30.2% vs anchor 30.5% (~0.3pp generous bias). GRPO multi lr=1e-5 eval pending (job 2929565).
+
+**SNLI-P**: GRPO multi lr=1e-5 canonical fair: **+25.2%** (was biased +25.3%). SimPO b3 canonical fair: **+24.4%** (was +25.5%). DPO 2pair lr=1e-5 fair: **+10.6%** (was +11.5%). GDPO v6 canonical: **+17.1%** (was biased +18.5%). GRPO single lr=1e-5 eval pending (job 2932698 — checkpoint path fix). GRPO mv2 ckpt4000 fair: **+1.9%** (intermediate checkpoint, confirms default-lr multi is weak at early stages).
+
+**SNLI-H**: GDPO v6 ckpt1500 fair rerun is best at **+15.2%**. GRPO multi lr=1e-5 eval pending (job 2932697 — checkpoint path fix). GRPO single lr=1e-5 (+6.3%) outperforms default lr (+3.0%). GRPO multi fair rerun: **+7.1%** (up from biased +5.2%). GRPO single fair: **+2.3%** (down from biased +3.0%). DPO 2pair 2ep fair: **+2.1%** (new entry). SimPO median PPL 90.2.
+
+### Llama-3.1-8B-Instruct
+
+**BoolQ**: GDPO ckpt500 is best (+17.3%); checkpoint profile: ckpt300 +14.5% → ckpt500 +17.3% → ckpt700 +16.2% → full +16.4% (peak at ckpt500). DPO 2pair lr=1e-5 is second-best offline (+11.5%, NED=0.133 notably low). SimPO stable (lr=2e-6, grad clip): β=2 +9.5%, β=3 +7.9%. GRPO mv2 mcl768 ckpt1600 (+13.2%): pre-collapse peak — reward healthy at step 1601 then drops to 0 at step 1701. Standard GRPO (no mcl768) collapses earlier. DPO 1pair lr=1e-5 (5% parse) measured on self-selected subset. GRPO single mcl768 training submitted (job 2929500).
+
+**SNLI-P**: GRPO single ckpt7500 at **+31.3%** (fair) is best. GRPO-fair multi is surprisingly competitive: ckpt4500 **+28.0%**, ckpt7000 **+29.0%** — much better than vanilla GRPO multi (+3% range). This is close to GRPO single, suggesting KL regularization + conditioned rewards significantly help multi-reward GRPO on this dataset. Profile: ckpt4500 +28.0% → ckpt7000 +29.0% → ckpt11200 (pending 2932699). SimPO (lr=2e-6): β=3 +18.6%, β=2 +17.4%. GDPO ckpt500 (+11.4%) beats full 1ep. DPO 2pair fails (3% parse). Remaining GRPO single ckpt10100/ckpt8500 results still pending fair correction.
+
+**SNLI-H**: All 15 biased entries now have fair re-evals. **SimPO β=2 at +11.6%** is the new best result (was biased +7.2% — significant revision upward). SimPO β=3 confirmed collapsed (−38.7%, only 5 CFs). **GRPO multi ckpt14900** confirms +9.6% (stable). **GDPO ckpt1000** +6.2%, ckpt1500 +6.0%, full +5.5%. **DPO lr=2e-5** +9.1% (biased, fair rerun in progress 2932695); **DPO lr=5e-5** training complete, eval pending (2932694). DPO lr=1e-5 confirms −0.6%. SFT 2ep reverses from +2.8% (biased) to **−6.5%** (fair) — this is a significant finding: the +2.8% was entirely due to favorable base CFs, the model actually degrades vs base.
+
+---
+
+## Underexplored Combination Audit (May 2026)
+
+Comprehensive audit of which model/method/dataset combinations had <2 config variants tried, and what was done.
+
+
+### Coverage summary (configs per method, unique base hyperparameters)
+
+| Model  | Dataset | DPO | SimPO | SFT | GDPO | GRPO-s | GRPO-m |
+|--------|---------|-----|-------|-----|------|--------|--------|
+| 7B     | BoolQ   | 4   | 3     | 2   | 3    | 2      | 3      |
+| 7B     | SNLI-P  | 2   | 2     | 1   | 3    | 2      | 3      |
+| 7B     | SNLI-H  | 2   | 2     | 1   | 3    | 2      | 3      |
+| 14B    | BoolQ   | 4   | 2     | 1   | 2    | 3      | 2      |
+| 14B    | SNLI-P  | 5   | 2     | 1   | 2    | 2      | 2      |
+| 14B    | SNLI-H  | 5   | 2     | 1   | 2    | 2      | 2      |
+| 3B     | BoolQ   | 4   | 2     | 1   | 2    | 3      | **1→2** |
+| 3B     | SNLI-P  | 6   | 2     | 1   | 3    | **1→2**| 5      |
+| 3B     | SNLI-H  | 6   | 2     | 1   | 3    | 3      | **1→2** |
+| Llama  | BoolQ   | 8   | 2     | 1   | 4    | 3      | 5      |
+| Llama  | SNLI-P  | 6   | 2     | 1   | 3    | 4      | 9+     |
+| Llama  | SNLI-H  | 10  | 3     | 2   | 4    | 7      | 2      |
+
+Bold **1→2** = previously 1 config, new eval submitted. 7B counts use different naming convention (not captured by automated scan, but all methods present in results).
+
+### Gaps addressed in May 2026 batch
+
+1. **3B BoolQ GRPO multi lr=1e-5** (job 2929565): model already trained, eval submitted. Prior single config used default lr; lr=1e-5 gave +25% on SNLI-P for multi — high-value test.
+2. **3B SNLI-H GRPO multi lr=1e-5** (job 2929566): same rationale. Single lr=1e-5 improved SNLI-H single (+3.0%→+6.3%); multi may show similar gain.
+3. **3B SNLI-P GRPO single lr=1e-5** (job 2929567): only 1 single config (default lr +16.9%); model already trained to 13200 steps.
+4. **All 15 biased Llama SNLI-H entries** (jobs 2929543–2929557): GDPO/GRPO/SFT/DPO evals that used own base CFs (1.2–3.0pp bias) — replaced with anchor-anchored fair evals.
+5. **1 biased Llama SNLI-P entry** (job 2929558): GRPO single ckpt7500 had -0.7pp anchor bias.
+6. **3 biased 3B SNLI-P entries** (jobs 2929559–2929561): GRPO multi lr=1e-5, SimPO b3g05, DPO 2pair 2ep had +1.1–1.9pp bias.
+
+### Fair re-eval policy
+
+All reported results must reuse the canonical anchor base CFs. Any entry where the eval generated its own base CFs (base_LFR deviates from anchor by >0.5pp) is considered **unfair** and a canonical fair re-eval is submitted. The "rerun(±Xpp)" notation in tables indicates bias before fair re-eval completes; once the `_fair` eval dir exists its result supersedes.
+
+**Complete fair re-eval sweep (May 2026)**:
+- 58 total fair re-eval jobs submitted (2929456, 2929543–2929561, 2929594–2929629) covering:
+  - Llama BoolQ: 8 entries (DPO 2pair lr=1e-5, GRPO single/multi early ckpts and full, GRPO mv2 lr=1e-5)
+  - Llama SNLI-P: 6 entries (GRPO single ckpt5600/7500/10100, GRPO mv2 lr=2e-6 ckpt11700, SFT, SimPO b2)
+  - Llama SNLI-H: 17 entries (GDPO 4, GRPO single 7, GRPO multi 2, DPO 3, SFT 1)
+  - 14B BoolQ: 2 entries (SimPO b2/b3)
+  - 14B SNLI-P: 2 entries (GDPO, GRPO multi)
+  - 3B BoolQ: 4 entries (GRPO single, GRPO single lr=1e-5, SimPO b2/b3)
+  - 3B SNLI-P: 6 entries (GDPO, GRPO mv2 ckpt4000/lr=1e-5/lr=2e-6, SimPO b2/b3)
+  - 3B SNLI-H: 5 entries (DPO 2pair 2ep, DPO 2pair 2ep lr=1e-5, GRPO multi, GRPO single, SimPO b2)
+
+**7B fair re-evals** (jobs 2929639–2929648): 10 biased 7B entries identified and re-evaluated. Created `run_eval_7b_fair.sh` anchored to `evaluation_boolq/snli_premise/snli_hypothesis_200s_grpo_mv2_g16` (the established 7B base). Biased entries: 6 BoolQ (DPO 1pair/2pair, GRPO mv2 mcl1024 ckpt2000, GRPO mv2 g24 lr=1e-6, GRPO v2 g16, SFT), 3 SNLI-P (DPO 2pair, GDPO g16, SFT), 1 SNLI-H (DPO 2pair).
+
+- **SFT** has only 1 config everywhere (lr=5e-6, 200step). SFT LR sweep (1e-5 negative, 2e-5 NaN PPL on BoolQ) confirmed lr=5e-6 is optimal — defensible.
+- **Llama BoolQ GRPO single mcl768**: training (job 2929500) — will confirm if mcl768 fix generalizes beyond multi-reward variant.
+- **Llama SNLI-H DPO lr=5e-5**: training (job 2929501) — will determine peak LR regime for this dataset.
+
+---
+
+## Training Configuration
+
+By default, reported runs use QLoRA (4-bit quantization), LoRA r=32, alpha=16, lr=5e-6 on **Qwen/Qwen2.5-7B-Instruct**. **Qwen2.5-14B-Instruct** experiments are expected to use the same recipe unless memory limits require smaller effective batch or adjusted `max_completion_length` / generations (especially for GRPO/GDPO).
+
+- **b4**: batch size 1, gradient accumulation 4 (effective batch 4)
+- **b16**: batch size 4, gradient accumulation 4 (effective batch 16, requires A100-80GB)
+- **200step**: `max_steps=200` (effective epochs vary: 1pair b4 ~0.4-0.5ep, 1pair b16 ~1.6-1.9ep, 2pair b4 ~0.2-0.3ep, 2pair b16 ~0.8-1.0ep)
+- **DPO pairs**: chosen = label-flipping CFs, rejected = non-flipping CFs; 2pair = best+worst and 2nd-best+2nd-worst; 1pair = best+worst only
+- **SFT**: trains on chosen examples only (no rejected/contrast data)
+- **GRPO g4/g16**: online RL, 4 or 16 generations per prompt, temperature=1.2, combined or decomposed reward. g4 trained for 2ep; g16 trains for 1ep (see [GRPO_ANALYSIS.md](GRPO_ANALYSIS.md) for epoch analysis)
+- **GRPO † (old reward)**: single reward = `flip + 0.8 * similarity` (no confidence weighting)
+- **GRPO v2 (corrected reward)**: single reward = `flip + confidence * similarity` (matches DPO unified score)
+- **GRPO mv2 (multi-reward v2)**: 4 decomposed rewards: FlipReward + SimilarityReward + GatedConfidenceReward + FormatReward
+- **GRPO lr1e6**: same reward as parent config but trained at lr=1e-6 (vs default 5e-6) to prevent BoolQ instability
+- **GDPO**: GRPO with per-reward normalization (normalize each reward independently per group, then sum). Uses mv2 reward functions. See `gdpo_trainer.py`
+- **g24**: experiments with 24 generations per prompt (vs 16) for better group diversity and reward signal. SNLI g24 requires ~24000 optimizer steps (2x BoolQ due to 2 prompts/entry), exceeding the 24h SLURM limit; resumed from checkpoints
+- **GDPO lr1e6**: GDPO with lr=1e-6 (vs default 5e-6) and FormatReward weight 3x to prevent entropy collapse
+- **GDPO v2 (conditioned)**: GDPO with conditioned rewards (similarity gated on flip), beta=0.001 KL penalty, lr=1e-6. ~~Dynamic sampling (zero-variance group filtering)~~ removed in v2fix (April 7) -- biased batch normalization. See [GDPO_BOOLQ_IMPROVEMENTS.md](GDPO_BOOLQ_IMPROVEMENTS.md)
+- **GDPO v3 (NED penalty)**: GDPO v2 + ned_penalty_alpha=0.2 (penalizes NED for non-flipping completions), lr=5e-6 for SNLI / lr=1e-6 for BoolQ. SNLI training was unstable (KL spike/entropy collapse)
+- **GDPO v4 (intermediate LR)**: GDPO v2 with lr=3e-6, beta=0.005 (5x stronger KL penalty), no NED penalty. Timed out at epoch ~0.97 with recurring KL spikes
+- **GDPO v5 (paper-aligned)**: Critical fix: `generation_batch_size=128` (8 groups) instead of 16 (1 group). All prior GDPO experiments had batch normalization operating on only 1 group, making GDPO mathematically identical to GRPO. v5 also uses paper hyperparameters: lr=1e-6, beta=0.0005, epsilon_high=0.28 (DAPO asymmetric clipping). BS=8 on single A100-80GB
+- **GRPO mcl768**: GRPO mv2 g16 with max_completion_length=768 for BoolQ (vs default 512)
+- **SFT lr1e5/lr2e5**: SFT LR sweep with lr=1e-5 or 2e-5 (vs default 5e-6). All previous SFT runs used lr=5e-6; standard SFT with LoRA typically uses 1e-5 to 2e-5
+- **GDPO v6**: GDPO v5 config (8 groups, conditioned rewards) with lr=5e-6 (matching GRPO). Tests whether higher LR helps with proper batch normalization
+- **GDPO paper-match**: Maximum paper alignment. 4 GPUs (32 groups), TRL built-in `normalize_then_sum`, lr=5e-6, beta=0.0, standard (non-conditioned) rewards. Uses standard GRPOTrainer (not custom GDPOTrainer)
+- **GRPO paper-match**: Control for GDPO paper-match. Same 4-GPU setup with `sum_then_normalize` (standard GRPO aggregation). Isolates the effect of per-reward normalization from larger batch size
+- **GRPO mv2 sft-ws**: SFT warm-start GRPO: base model first fine-tuned via SFT on BoolQ CFs, LoRA merged, then used as initialization for GRPO mv2 g16 training. Result: no improvement over cold-start GRPO
+- **SFT LR sweep results**: lr=1e-5 uniformly negative across datasets; lr=2e-5 causes heavy memorization (token accuracy 0.96, NaN PPL on BoolQ). Confirms lr=5e-6 is optimal for SFT with LoRA
+- **GDPO v7 (4GPU + v6 innovations)**: 4 GPUs (32 groups), conditioned rewards, beta=0.0005, epsilon_high=0.28, lr=5e-6. Uses custom GDPOTrainer via torchrun. Result: +15.7% on SNLI-P — same as v6 (8 groups), confirming more groups don't improve ΔLFR
+- **GDPO v6 checkpoint sweep (SNLI-P)**: Evaluations at ckpt-2000 (~0.25ep), ckpt-4000 (~0.50ep), ckpt-6000 (~0.75ep). Peak at ckpt-2000 (+18.2%), confirming GDPO peaks earlier than GRPO (0.25ep vs 0.50ep). Pattern: +18.2% → +18.1% → +16.5% → +15.7% (full epoch)
+- **GDPO v6 checkpoint sweep (SNLI-H)**: Peak at ckpt-6000 (~0.75ep): **+18.7% ΔLFR**, surpassing GRPO mv2 g16 (+15.1%). Trajectory: +15.9% (0.25ep) → +17.6% (0.50ep) → +18.7% (0.75ep) → +17.6% (1.0ep). Peak later than SNLI-P
+- **DPO BoolQ ml2048**: 2pair b4 2ep with max_length=2048: +8.5% ΔLFR. Below 1pair b4 (+10.5%), confirming 2pair is worse for BoolQ DPO
+- **GDPO v6 BoolQ mcl1024**: max_completion_length=1024: +0.3% ΔLFR. Longer completions did not help GDPO on BoolQ
+- **GRPO mv2 BoolQ mcl1024**: TIMEOUT after 24h (mcl1024 makes generation ~4x slower). Reached checkpoint-4400; eval pending
+- **SFT BoolQ ml2048**: max_seq_length=2048 (vs default 1024). Modest improvement +1.8% (vs -0.0% at ml1024), suggesting training truncation was a minor factor for SFT on BoolQ
+- **DPO BoolQ ml2048**: max_length=2048 (vs default 1024). Tests whether DPO also benefits from longer training sequences on BoolQ. Pending (fixed TRL API: removed deprecated max_prompt_length from DPOConfig)
+- **KTO**: `train_dpo.py --loss_type kto` uses TRL's `KTOTrainer` with the Kahneman-Tversky utility loss (gains/losses weighted asymmetrically — losses loom larger than gains). Data is converted from the standard DPO pair format `(prompt, chosen, rejected)` into the binary `(prompt, completion, label: True/False)` format expected by `KTOTrainer` via `expand_to_kto_format`. Each DPO pair becomes 2 independent rows (1 desirable + 1 undesirable). This tests whether the KT asymmetric loss outperforms the symmetric DPO log-ratio loss on the same paired data; it does **not** test KTO's other advertised advantage (unpaired binary feedback, i.e., no `construct_dpo_pairs.py` pairing required).
+- **DPO IPO**: `--loss_type ipo`. Identity Preference Optimization — uses squared error instead of sigmoid, bounded optimization that prevents overfitting. Beta maps to regularization parameter tau. All default hyperparameters (lr=5e-6, beta=0.1). Result: catastrophic on BoolQ (-11.7%), decent on SNLI-P (+14.9%), moderate on SNLI-H (+11.7%). Possible LR mismatch — IPO loss scale (~25) is fundamentally different from sigmoid DPO (~0.7)
+- **DPO Robust**: `--loss_type robust --label_smoothing 0.01`. Noise-tolerant DPO that models annotation noise probability. All default hyperparameters. Result: worse than standard DPO everywhere (BoolQ +3.8%, SNLI-P +13.7%, SNLI-H +7.4%). Our synthetic data is clean, so noise tolerance isn't needed
+- **DPO DiscoPOP**: `--loss_type discopop`. LLM-discovered loss function. All default hyperparameters. Result: near-zero learning (BoolQ +0.2%, SNLI-P -1.1%, SNLI-H +0.9%). Essentially failed to learn on our task
+- **SimPO** (`train_dpo.py --loss_type simpo`, CPOTrainer): reference-free preference; `beta=2.0`, `simpo_gamma=1.4`, `cpo_alpha=0`, same b4 2ep / pair choice as best DPO per dataset. **BoolQ +9.8%** (second-best offline, 0.7pp below sigmoid DPO +10.5%; NED 0.111, PPL 14.0). **SNLI-P +27.1%** (within 0.4pp of GRPO mv2). **SNLI-H +26.4%** with high NED (0.477); **SNLI-H β×γ grid**: best **β=3, γ=0.5** (+29.7% ΔLFR, NED 0.428, lowest PPL in grid ~1202 vs very high PPL for other cells — SimPO is sensitive to β). See SNLI-H table for all six cells. **Fair-base SimPO b3γ0.5** (reuse GRPO mv2 g16 base CFs): BoolQ **+21.8%**, SNLI-P **+23.5%** (tables above). **SimPO b3γ0.5 + CPO α=0.1** (SNLI-H): +25.2% ΔLFR; aggregate PPL can be inflated by a few bad CFs — inspect `eval_full.json` / generations when the headline PPL looks pathological.
+- **Perplexity in evaluation** (`evaluate_models.py`): A few degenerate edits (e.g. single character `"+"`) produced **NaN loss** under the quantized fine-tuned model; averaging those into mean PPL made the **entire** average NaN. **Fix**: skip non-finite loss in `compute_perplexity`, require ≥2 characters and ≥2 tokens, aggregate only **finite** per-CF PPLs; report `—` if none valid. Re-run eval to refresh markdown with the new aggregation
+- **GDPO v6 SNLI-H ablation** (same v6 setup except one trick removed; full 1.0ep): removing **conditioned rewards** collapses ΔLFR to **-4.6%** (baseline +18.7%). Removing asymmetric clipping → +13.0%. Removing KL → raw ΔLFR +37.1% but PPL 1360 and NED 0.442 — KL mainly constrains disfluent / oversized edits, not “holding back” good performance at the baseline setting
+- **DPO BoolQ β=0.05**: `beta=0.05` vs default 0.1, else same as 1pair b4 2ep. Result: **+5.8%** ΔLFR vs **+10.5%** at β=0.1; PPL **29.2** vs 23.9 — weaker KL hurts BoolQ DPO
+- **DPO BoolQ IPO lr=1e-6**: same as IPO variant but `learning_rate=1e-6`. Result: **+0.3%** ΔLFR (vs **−11.7%** at lr=5e-6) — LR was the main issue for IPO on BoolQ, but tuned IPO still loses to sigmoid DPO
+

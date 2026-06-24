@@ -1,18 +1,18 @@
 # Evaluation Results
 
-This file records counterfactual-generation **evaluation** runs. **Primary tables** (through [Training Configuration](#training-configuration)) are **Qwen/Qwen2.5-7B-Instruct** unless a row says otherwise. **[Qwen2.5-14B-Instruct](#qwen25-14b-instruct)** uses the same metrics and separate fair-base dirs; pipeline and parity notes are in [OVERVIEW.md](OVERVIEW.md).
+Counterfactual-generation evaluation tables for all models. Discussion, analysis, and methodology: [OVERVIEW.md](OVERVIEW.md). **Primary tables** are **Qwen/Qwen2.5-7B-Instruct** unless a row says otherwise.
 
 **Metrics**:
 
 - **LFR** (Label Flip Rate): % of counterfactuals where the base model's prediction changed from the original label (higher = better)
 - **ΔLFR**: LFR improvement over the base model on the same evaluation set
-- **NED** (Normalized Edit Distance): edit distance / max text length (lower = more minimal edits)
-- **PPL** (Perplexity): fluency of generated text (lower = more fluent). **Aggregation**: mean over counterfactuals with **finite** per-CF PPL only (since 2026-04: `evaluate_models.py` skips non-finite loss and omits degenerate strings from the mean; legacy reports that showed `nan` had a few NaN CFs that poisoned the average — see Training Configuration).
+- **NED** (Normalized Edit Distance): edit distance / max text length (lower = more minimal edits). **Aggregation**: **median** NED over CFs with NED > 0 (identical copies excluded — those are not counterfactuals by definition; see [RGF, ACL 2022](https://aclanthology.org/2022.acl-long.117)). Best-result N=200 entries use this corrected median; historical/secondary entries may use mean NED from `eval_summary.avg_norm_edit_distance`.
+- **PPL** (Perplexity): fluency of generated text (lower = more fluent). **Aggregation**: **median** PPL across generated CFs (robust to degenerate outlier CFs; mean is 3–27× higher when a few CFs have catastrophic loss). All canonical N=200 best results use median. Note: some historical/secondary entries (N=100 grid, early checkpoint sweeps, or collapsed-model runs) may still show mean PPL from `eval_summary.avg_perplexity` — do not compare those to median values.
 - **LFR/NED**: label flip rate / normalized edit distance — edit efficiency (higher = more effective per unit of change). Reported in individual eval reports for N=200 runs.
 - **Fair**: whether base model counterfactuals were reused across evaluations (`--base_eval_dir`) for consistent comparison
 - **N**: number of validation samples evaluated (10 CFs generated per sample)
-- **Parsed CFs only**: LFR, NED, and PPL in `eval_summary.json` are averaged over counterfactuals with a **non-null parsed** `edited_text` (`evaluate_models.py` `compute_metrics`). The tuned model generates its own CFs, so **`total_cfs` in `tuned_metrics` can be lower than in `base_metrics`** when the policy emits more unparseable outputs; this also appears in pre-v2fix GRPO fair runs. Fair evals still use the **same sampled entries** and, with `--base_eval_dir`, the **same stored base CFs** for the base side.
-- **Parse rate** (hidden quality dimension): each entry gets 10 generation attempts; only those matching the structured format count. Parse rates vary: Base ~58–82%, DPO ~49–67%, SimPO ~24–70%, GRPO ~28–50% (dataset-dependent). **SimPO SNLI-H** is the extreme case: only 484/2000 (24%) parse, and 27/200 entries yield zero CFs. High ΔLFR methods with low parse rates are measured on a **self-selected subset** — see [OVERVIEW.md § CF coverage](OVERVIEW.md#cf-coverage-and-parse-rates) for details.
+- **Parsed CFs only**: metrics are averaged over CFs with a non-null parsed `edited_text`. Fair evals (`--base_eval_dir`) reuse the same stored base CFs for the base side.
+- **Parse rate** (`parse%`): fraction of the 10×N generation attempts that produced a valid `<edit>…</edit>` output. All metrics (LFR, NED, PPL) are computed **only over parsed CFs**. Low parse rate means the reported LFR is over a small, potentially biased sample — ⚠ < 60%, ⛔ < 10%. **Selection rule:** the run *featured* per method-cell in `results_charts.html` is the best ΔLFR run with **parse ≥ 15% of the base parse rate** — high-ΔLFR runs at near-zero parse are collapse artifacts (a model emitting few well-formed edits, all easy to flip) and are excluded from selection. See [parse rate summary below](#parse-rate-summary) and [OVERVIEW.md § CF coverage](OVERVIEW.md#cf-coverage-and-parse-rates) for analysis.
 
 **Methods**: DPO (preference optimization), SimPO (reference-free preference via CPOTrainer), SFT (supervised fine-tuning on chosen CFs), GRPO (online RL with reward signal), GDPO (GRPO with per-reward normalization), KTO (Kahneman-Tversky Optimization — asymmetric loss via `KTOTrainer`; see Training Configuration)
 
@@ -24,12 +24,47 @@ This file records counterfactual-generation **evaluation** runs. **Primary table
 
 ---
 
+## Parse Rate Summary
+
+Parse rate = parsed CFs / (N × 10 attempts). Computed for best-result N=200 evaluation dirs. Values below 60% flagged ⚠; below 10% flagged ⛔. **BoolQ parse rates are generally high (70–92%) for all models. SNLI tasks are harder** — 3B models show 30–49% parse rates even at base, reflecting short NLI sentence difficulty. Critically, Llama SNLI-H SimPO (4.6%), DPO lr=2e-5 (2.3%), and SNLI-P DPO lr=1e-5 (3.9%) are near-collapse: LFR is computed over a very small biased sample and should be interpreted with extreme caution.
+
+| Model    | Dataset | Base  | DPO   | SimPO | SFT   | GRPO-S | GRPO-M | GDPO  |
+|----------|---------|-------|-------|-------|-------|--------|--------|-------|
+| Llama-8B | BoolQ   | 89.0% | 84.2% | 70.3% | 83.8% | 86.5%  | 89.2%  | 91.7% |
+| Llama-8B | SNLI-P  | 88.8% | 3.9%⛔| 94.2% | 80.8% | 56.0%⚠ | 78.8% | 87.2% |
+| Llama-8B | SNLI-H  | 89.1% | 2.3%⛔| 4.6%⛔| 11.1%⚠| 83.5% | 66.0%  | 66.5% |
+| Qwen-3B  | BoolQ   | 89.3% | —     | 73.9% | —     | 55.4%⚠ | 54.0%⚠| 90.3% |
+| Qwen-3B  | SNLI-P  | 42.6%⚠| 48.9%⚠| 42.3%⚠| —    | 34.3%⚠ | 33.2%⚠| 47.4%⚠|
+| Qwen-3B  | SNLI-H  | 45.2%⚠| 39.4%⚠| 36.8%⚠| 46.9%⚠| 30.9%⚠| 32.5%⚠| 46.0%⚠|
+| Qwen-14B | BoolQ   | 88.0% | 76.2% | 66.0% | 89.2% | 82.1%  | 85.2%  | 67.5% |
+| Qwen-14B | SNLI-P  | 64.4% | 58.4%⚠| 68.8% | 65.3% | 50.5%⚠ | 26.9%⚠| 30.4%⚠|
+| Qwen-14B | SNLI-H  | 61.8% | 47.7%⚠| 15.8%⚠| 70.1% | 36.6%⚠ | 29.2%⚠| 42.8%⚠|
+| Qwen-7B  | BoolQ   | 82.3% | —     | —     | —     | 81.5%  | 80.5%  | —     |
+| Qwen-7B  | SNLI-P  | 68.6% | —     | 61.1% | —     | —      | 44.5%⚠ | 71.2% |
+| Qwen-7B  | SNLI-H  | 58.1%⚠| —    | 24.2%⚠| 63.3% | —      | 33.8%⚠ | 56.6%⚠|
+
+Notes: "—" = progress file unavailable for that run. GRPO-S = GRPO single-reward, GRPO-M = GRPO multi-reward. 3B SNLI-P/H parse rates are low for the base model too, indicating task-difficulty (short NLI sentences). Llama SNLI-H SimPO and DPO collapse entries are shown in the per-table notes.
+
+---
+
 ## Qwen2.5-7B-Instruct
 
 Tables in **BoolQ**, **SNLI-Premise**, and **SNLI-Hypothesis** are for this base model (QLoRA adapters on `Qwen/Qwen2.5-7B-Instruct`).
 
 ### BoolQ
 
+**Canonical-base fair re-evals (base CF set `05b8d14619`).** These reuse one frozen 7B BoolQ base CF anchor (`evaluation_boolq_200s_grpo_mv2_g16`) so every method is judged against the same base. NED = median over NED>0; PPL = median. These are the values featured in `results_charts.html`.
+
+| Method | Config    | Duration | LFR   | ΔLFR   | NED   | PPL  | Parse | Fair | N   |
+| ------ | --------- | -------- | ----- | ------ | ----- | ---- | ----- | ---- | --- |
+| SimPO  | 2pair b4 b3γ0.5 **fair-canon** | 2ep | 66.7% | **+28.6%** | 0.115 | 8.8 | 68% | yes✓ | 200 | (7B BoolQ best) |
+| DPO    | 2pair b4 fair-canon | 2ep | 59.9% | **+22.1%** | 0.093 | 8.8 | 51% | yes✓ | 200 |
+| GRPO single | v2 g16 **lr=1e-5** fair-canon | 1ep | 59.0% | **+21.2%** | 0.086 | 8.3 | 45% | yes✓ | 200 | (lr=1e-5 lifts +13.5pp over default lr) |
+| GRPO multi | mv2 g16 **lr=1e-5** fair-canon | 1ep | 56.6% | **+18.8%** | 0.090 | 8.1 | 52% | yes✓ | 200 | (lr=1e-5 lifts +9pp over default lr) |
+| SFT    | 2pair b4 fair-canon | — | 47.2% | +9.6% | 0.141 | 8.4 | 80% | yes✓ | 200 |
+| GDPO   | g16 ckpt200 fair-canon | — | 37.7% | +1.1% | 0.106 | 9.6 | 82% | yes✓ | 200 |
+
+Full historical sweep (mixed bases, kept for the record):
 
 | Method | Config    | Duration | LFR   | ΔLFR   | NED   | PPL  | Fair | N   |
 | ------ | --------- | -------- | ----- | ------ | ----- | ---- | ---- | --- |
@@ -37,7 +72,7 @@ Tables in **BoolQ**, **SNLI-Premise**, and **SNLI-Hypothesis** are for this base
 | DPO    | 2pair b4  | 200step  | 57.6% | +13.9% | 0.130 | 10.2 | no   | 50  |
 | DPO    | 1pair b4  | 2ep      | 48.0% | +10.5% | 0.110 | 23.9 | yes  | 200 |
 | SimPO  | 1pair b4 simpo | 2ep | 46.7% | +9.8%  | 0.111 | 14.0 | yes  | 200 |
-| SimPO  | 2pair b4 b3γ0.5 | 2ep | 59.0% | +21.8% | 0.167 | 12.5 | yes  | 200 |
+| SimPO  | 2pair b4 b3γ0.5 | 2ep | 59.0% | +21.8% | 0.167 | 10.4 | yes  | 200 |
 | DPO    | 1pair b4 beta005 | 2ep | 42.8% | +5.8%  | 0.103 | 29.2 | yes  | 200 |
 | DPO    | 2pair b16 | 3ep      | 52.2% | +9.4%  | 0.122 | 11.2 | yes  | 100 |
 | DPO    | 2pair b4  | 2ep      | 52.5% | +9.3%  | 0.138 | 12.0 | yes  | 100 |
@@ -64,22 +99,22 @@ Tables in **BoolQ**, **SNLI-Premise**, and **SNLI-Hypothesis** are for this base
 | SFT    | 2pair b16 | 1ep      | 35.6% | -7.0%  | 0.158 | 11.4 | yes  | 100 |
 | DPO    | 1pair b4  | 200step  | 35.4% | -7.8%  | 0.130 | 11.7 | yes  | 100 |
 | SFT    | 1pair b4  | 0.5ep    | 33.6% | -9.1%  | 0.169 | 11.8 | yes  | 100 |
-| GDPO   | mv2 g16   | ckpt200  | 37.7% | +1.1%  | 0.166 | 11.8 | yes  | 200 |
+| GDPO   | mv2 g16   | ckpt200  | 37.7% | +1.1%  | 0.106 | 11.8 | yes  | 200 |
 | GDPO   | mv2 g16   | ckpt200  | 36.3% | -6.1%  | 0.166 | 11.5 | yes  | 100 |
 | GRPO   | mv2 g16   | ~0.25ep  | 37.8% | +1.2%  | 0.170 | 11.6 | yes  | 200 |
 | GRPO   | mv2 g16 sft-ws| ~0.25ep | 37.8% | +1.2%  | 0.170 | 11.9 | yes  | 200 |
 | GRPO   | mv2 g16 lr1e6 | ~0.25ep | 37.4% | +1.1% | 0.155 | 11.8 | yes  | 200 |
-| GRPO   | v2 g16    | ~0.11ep  | 37.7% | +0.4%  | 0.151 | 11.7 | yes  | 200 |
+| GRPO   | v2 g16    | ~0.11ep  | 37.7% | +0.4%  | 0.096 | 11.7 | yes  | 200 |
 | GDPO   | mv2 g16 lr1e6 | 1.0ep | 36.8% | +0.2%  | 0.153 | 11.6 | yes  | 200 |
 | GRPO   | v2 g24 lr1e6 | 1.0ep | 36.7% | +0.2%  | 0.161 | 11.6 | yes  | 200 |
 | SFT    | 2pair b4  | 2ep      | 37.2% | -0.0%  | 0.160 | 11.5 | yes  | 200 |
-| SFT    | 2pair b4 ml2048| 200step | 38.4% | +1.8%  | 0.162 | 11.6 | yes  | 200 |
+| SFT    | 2pair b4 ml2048| 200step | 38.4% | +1.8%  | 0.141 | 11.6 | yes  | 200 |
 | SFT    | 2pair b4 lr1e5| 200step | 40.2% | -2.0%  | 0.175 | 12.0 | yes  | 100 |
 | SFT    | 2pair b4 lr2e5| 200step | 44.0% | +1.9%  | 0.272 | —    | yes  | 100 |
 | DPO    | 2pair b4 ml2048| 2ep      | 45.4% | +8.5%  | 0.123 | 26.9 | yes  | 200 |
 | DPO    | 1pair b4 ml2048| 2ep      | 40.5% | +3.8%  | 0.114 | 540.4| yes  | 200 |
 | GRPO   | mv2 g16 v2fix | 1.0ep | 8.7% | **-28.3%** | 0.214 | 12.0 | yes  | 200 |
-| GRPO   | mv2 g16 mcl768 | ~0.25ep | 38.2% | +1.7% | 0.159 | 12.0 | yes  | 200 |
+| GRPO   | mv2 g16 mcl768 | ~0.25ep | 38.2% | +1.7% | 0.098 | 12.0 | yes  | 200 |
 | GRPO-fair| mv2 g16 fair | 1.0ep   | 36.5% | +0.1%  | 0.142 | —    | yes  | 200 |
 | GDPO v6| mv2 g16 mcl1024| 1.0ep  | 36.7% | +0.3%  | 0.137 | 11.8 | yes  | 200 |
 | GDPO v2| mv2 g16 cond  | 1.0ep | 36.8% | +0.4%  | 0.166 | 11.8 | yes  | 200 |
@@ -106,20 +141,19 @@ Tables in **BoolQ**, **SNLI-Premise**, and **SNLI-Hypothesis** are for this base
 | DPO    | 1pair b4 disco | 2ep      | 36.5% | +0.2%  | 0.168 | 11.6 | yes  | 200 |
 | KTO    | 1pair b4 kto  | 2ep      | training (**2811932**) | | | | | |
 
-**GRPO mv2 g16 v2fix** (BoolQ, fair, `evaluation_boolq_200s_grpo_mv2_g16_v2fix/`, job **2782111**): **−28.3%** ΔLFR vs **~+1%** for shorter mv2 g16 runs — likely **policy collapse** after full 1.0ep; inspect `eval_full.json` / generations before comparing to other GRPO rows.
-
 ### SNLI-Premise
 
 
 | Method | Config    | Duration | LFR   | ΔLFR   | NED   | PPL   | Fair | N   |
 | ------ | --------- | -------- | ----- | ------ | ----- | ----- | ---- | --- |
-| GRPO   | mv2 g16 v2fix | 1.0ep | 80.9% | +29.1% | 0.336 | 92.9  | yes  | 200 |
-| SimPO  | 2pair b4 simpo v2fix | 2ep | 83.4% | +30.5% | 0.346 | 157.6 | yes  | 200 |
+| GRPO   | mv2 g16 v2fix | 1.0ep | 80.9% | +29.1% | 0.327 | 92.9  | yes  | 200 |
+| SimPO  | 2pair b4 simpo v2fix | 2ep | 83.4% | +30.5% | 0.340 | 157.6 | yes  | 200 |
+| DPO    | 2pair b4 **fair-canon** | 2ep | 78.0% | +24.5% | 0.311 | 53.5 | yes✓ | 200 | (canonical-base re-eval, was 1p +15.7%; featured in charts) |
 | GRPO   | mv2 g16   | 1.0ep    | 79.7% | +27.5% | 0.348 | 72.7  | yes  | 200 |
 | SimPO  | 2pair b4 simpo | 2ep | 79.9% | +27.1% | 0.358 | 154.7 | yes  | 200 |
 | SimPO  | 2pair b4 b3γ0.5 | 2ep | 76.1% | +23.5% | 0.362 | 131.2 | yes  | 200 |
 | GRPO   | paper 4GPU| 1.0ep    | 78.3% | +25.9% | 0.348 | 103.2 | yes  | 200 |
-| GRPO   | v2 g16    | ~0.50ep  | 78.0% | +25.8% | 0.345 | 110.6 | yes  | 200 |
+| GRPO   | v2 g16    | ~0.50ep  | 78.0% | +25.8% | 0.337 | 110.6 | yes  | 200 |
 | GRPO   | mv2 g24   | 1.0ep    | 74.2% | +22.2% | 0.387 | 146.6 | yes  | 200 |
 | DPO    | 2pair b4  | 2ep      | 75.0% | +22.0% | 0.327 | 142.3 | no   | 200 |
 | DPO    | 2pair b4  | 2ep      | 71.5% | +17.3% | 0.326 | —     | yes  | 100 |
@@ -190,7 +224,7 @@ Tables in **BoolQ**, **SNLI-Premise**, and **SNLI-Hypothesis** are for this base
 | SFT    | 1pair b4  | 1ep      | 49.3% | -3.4%  | 0.261 | 137.0 | yes  | 100 |
 | SFT    | 1pair b4  | 2ep      | 48.4% | -4.0%  | 0.261 | 188.1 | yes  | 100 |
 | SFT    | 2pair b4  | 1ep      | 47.4% | -4.7%  | 0.265 | 115.1 | yes  | 100 |
-| SFT    | 2pair b16 | 1ep      | 53.2% | +0.9%  | 0.250 | 130.5 | yes  | 200 |
+| SFT    | 2pair b16 | 1ep      | 53.2% | +0.9%  | 0.236 | 130.5 | yes  | 200 |
 | SFT    | 2pair b4  | 200step  | 53.1% | +0.9%  | 0.249 | 131.4 | yes  | 200 |
 | SFT    | 2pair b16 | 0.5ep    | 49.9% | -2.2%  | 0.237 | 136.7 | yes  | 200 |
 | SFT    | 2pair b4  | 0.5ep    | 49.8% | -2.0%  | 0.253 | 145.6 | yes  | 200 |
@@ -202,9 +236,10 @@ Tables in **BoolQ**, **SNLI-Premise**, and **SNLI-Hypothesis** are for this base
 
 | Method | Config    | Duration | LFR   | ΔLFR   | NED   | PPL   | Fair | N   |
 | ------ | --------- | -------- | ----- | ------ | ----- | ----- | ---- | --- |
-| GRPO   | v2 g24    | 1.0ep    | 67.4% | +22.6% | 0.302 | 9651  | yes  | 200 |
+| DPO    | 2pair b4 **fair-canon** | 2ep | 68.4% | +23.2% | 0.340 | 113.2 | yes✓ | 200 | (canonical-base re-eval, 44% parse; featured in charts) |
+| GRPO   | v2 g24    | 1.0ep    | 67.4% | +22.6% | 0.250 | 137 (med) | yes | 200 | (NED median-nz, PPL median; mean PPL was 9651 — outlier-driven; ⚠ 25% parse; featured over g16 +11.0%) |
 | SimPO  | 2pair b4 simpo b3g05 | 2ep | 74.2% | +29.7% | 0.428 | 1202  | yes  | 200 |
-| SimPO  | 2pair b4 b3γ0.5 v2fix | 2ep | 73.6% | +29.4% | 0.390 | 617.1 | yes  | 200 |
+| SimPO  | 2pair b4 b3γ0.5 v2fix | 2ep | 73.6% | +29.4% | 0.370 | 617.1 | yes  | 200 |
 | SimPO  | 2pair b4 simpo b2g05 | 2ep | 71.2% | +26.8% | 0.459 | 30329 | yes  | 200 |
 | SimPO  | 2pair b4 simpo | 2ep (β2 γ1.4) | 70.9% | +26.4% | 0.477 | 15519 | yes  | 200 |
 | SimPO  | 2pair b4 simpo b3g14 | 2ep | 70.1% | +25.2% | 0.464 | 1606  | yes  | 200 |
@@ -218,21 +253,21 @@ Tables in **BoolQ**, **SNLI-Premise**, and **SNLI-Hypothesis** are for this base
 | SimPO  | 2pair b4 simpo_qual b3γ0.8 CPO α=0.005 | 2ep | 72.5% | +28.1% | 0.467 | 1593  | yes  | 200 |
 | SimPO  | 2pair b4 simpo_qual b3γ0.65 | 2ep | 70.7% | +26.2% | 0.439 | 1475  | yes  | 200 |
 | SimPO  | 2pair b4 simpo_qual b3γ0.5 CPO α=0.015 | 2ep | 68.2% | +23.7% | 0.442 | 38417 | yes  | 200 |
-| DPO    | 2pair b4  | 2ep      | 65.9% | +21.0% | 0.378 | 296.5 | yes  | 200 |
+| DPO    | 2pair b4  | 2ep      | 65.9% | +21.0% | 0.300 | 296.5 | yes  | 200 |
 | DPO    | 2pair b4 v2fix | 2ep | 49.5% | +5.4%  | 0.315 | 285.7 | yes  | 200 |
-| GRPO   | mv2 g16 v2fix | 1.0ep | 67.0% | +22.6% | 0.358 | 508.3 | yes  | 200 |
+| GRPO   | mv2 g16 v2fix | 1.0ep | 67.0% | +22.6% | 0.353 | 508.3 | yes  | 200 |
 | GRPO   | mv2 g16   | 1.0ep    | 59.4% | +15.1% | 0.266 | 702.9 | yes  | 200 |
 | GRPO   | mv2 g24   | 1.0ep    | 57.4% | +12.6% | 0.253 | 453.2 | yes  | 200 |
-| GRPO   | v2 g16    | 1.0ep    | 55.7% | +11.0% | 0.269 | 317.3 | yes  | 200 |
+| GRPO   | v2 g16    | 1.0ep    | 55.7% | +11.0% | 0.229 | 317.3 | yes  | 200 |
 | DPO    | 1pair b4  | 2ep      | 53.4% | +8.7%  | 0.334 | 368.0 | no   | 200 |
 | GRPO-fair| mv2 g16 fair | 1.0ep  | 51.1% | +6.8%  | 0.316 | 285.1 | yes  | 200 |
-| SFT    | 2pair b4  | 2ep      | 46.1% | +1.7%  | 0.329 | 286.8 | yes  | 200 |
+| SFT    | 2pair b4  | 2ep      | 46.1% | +1.7%  | 0.326 | 286.8 | yes  | 200 |
 | GDPO   | mv2 g24 lr1e6 | 1.0ep | 45.6% | +1.1%  | 0.302 | 247.6 | yes  | 200 |
 | GDPO v2| mv2 g16 cond  | 1.0ep | 45.0% | +0.7%  | 0.316 | 329.0 | yes  | 200 |
 | GDPO v3| mv2 g16 ned02 | ~0.95ep | 46.3% | +1.8% | 0.276 | 308.3 | yes  | 200 |
 | GDPO v6| mv2 g16 lr5e6 | ~0.25ep| 60.3% | +15.9% | 0.365 | 248.9 | yes  | 200 |
 | GDPO v6| mv2 g16 lr5e6 | ~0.50ep| 62.0% | +17.6% | 0.363 | 329.6 | yes  | 200 |
-| GDPO v6| mv2 g16 lr5e6 | ~0.75ep| 63.1% | +18.7% | 0.361 | 334.9 | yes  | 200 |
+| GDPO v6| mv2 g16 lr5e6 | ~0.75ep| 63.1% | +18.7% | 0.372 | 334.9 | yes  | 200 |
 | GDPO v6| mv2 g16 lr5e6 | 1.0ep  | 61.8% | +17.6% | 0.356 | 281.1 | yes  | 200 |
 | GDPO v6| mv2 g16 v2fix | 1.0ep | 57.0% | +12.1% | 0.365 | 293.4 | yes  | 200 |
 | GDPO v6 abl | no cond | 1.0ep | 39.9% | -4.6%  | 0.216 | 345.9 | yes  | 200 |
@@ -305,37 +340,47 @@ All rows below use **Qwen/Qwen2.5-14B-Instruct** as generator and **judge** (`ev
 
 | Method | Config    | Duration | LFR   | ΔLFR | NED   | PPL  | Fair | N   |
 | ------ | --------- | -------- | ----- | ---- | ----- | ---- | ---- | --- |
-| SimPO  | 2pair b4 β3γ0.5 | 2ep | 62.5% | +7.0% | 0.248 | 9.1  | yes  | 200 |
-| GDPO v6| g16 bs4   | 1.0ep    | 60.8% | +6.0% | 0.186 | 8.3  | yes  | 200 |
-| GRPO   | mv2 g16   | 1.0ep    | 56.7% | +1.7% | 0.264 | 8.5  | yes  | 200 |
-| SFT    | 2pair b4 ml2048 | 200step | 55.7% | +0.8% | 0.298 | 8.5  | yes  | 200 |
-| GDPO v6| g16 bs8   | ckpt-200 | 55.3% | +0.5% | 0.292 | 8.8  | yes  | 200 |
-| DPO    | 1pair b4  | 2ep      | 55.2% | +0.3% | 0.268 | 8.4  | yes  | 200 |
-| GRPO   | v2 g16 (single) | 1ep | training (**2819415**) | | | | | |
+| SimPO  | 2pair b4 β3γ0.5 | 2ep | 62.5% | +7.0% | 0.201 | 7.4  | yes  | 200 |
+| SimPO  | 2pair b4 β2γ0.5 | 2ep | 59.8% | +4.6% | 0.194 | 7.0  | yes  | 200 |
+| GDPO v6| g16 bs4   | 1.0ep    | 60.8% | +6.0% | 0.150 | 6.5  | yes  | 200 |
+| GRPO   | v2 g16 (single) | 1ep | 57.7% | +2.9% | 0.223 | 6.9  | yes  | 200 |
+| DPO    | 2pair b4 lr=1e-5 | 2ep   | 57.9% | +2.9% | 0.220 | 7.0  | yes  | 200 |
+| GRPO   | mv2 g16 lr=2e-6 | ckpt7100 (~89%) | 55.5% | +0.8% | 0.287 | 7.0 | yes  | 200 |
+| GRPO   | mv2 g16   | 1.0ep    | 56.7% | +1.7% | 0.217 | 6.8  | yes  | 200 |
+| SFT    | 2pair b4 ml2048 | 200step | 55.7% | +0.8% | 0.250 | 7.0  | yes  | 200 |
+| GDPO v6| g16 bs8   | ckpt-200 | 55.3% | +0.5% | 0.292 | 7.0  | yes  | 200 |
+| DPO    | 1pair b4  | 2ep      | 55.2% | +0.3% | 0.268 | 6.8  | yes  | 200 |
+| GRPO   | v2 g16 (single) lr=2e-6 | ckpt7400 (~93%) | 54.5% | -0.5% | 0.286 | 7.0 | yes | 200 |
 
-SimPO: `dpo_model_boolq_2pair_b4_2ep_simpo_b3_g05_qwen25_14b` → `evaluation_boolq_200s_simpo_b3g05_qwen25_14b/` (train **2777928**, eval **2780617**).
-GDPO v6 full epoch: `gdpo_model_boolq_1ep_g16_qwen25_14b_v6` (resumed to ckpt-2000, bs=4) → `evaluation_boolq_200s_gdpo_v6_qwen25_14b/` (eval **2805602**). NED 0.186 is notably lower than the ckpt-200 partial (0.292), suggesting the full training teaches more minimal edits.
+SimPO β=3: `dpo_model_boolq_2pair_b4_2ep_simpo_b3_g05_qwen25_14b` → `evaluation_boolq_200s_simpo_b3g05_qwen25_14b/` (train **2777928**, eval **2780617**). SimPO β=2: `evaluation_boolq_200s_simpo_b2g05_qwen25_14b/`. β=2 gives +4.6% vs β=3 +7.0% — β=3 remains best for 14B BoolQ.
+GDPO v6 full epoch: `gdpo_model_boolq_1ep_g16_qwen25_14b_v6` (resumed to ckpt-2000, bs=4) → `evaluation_boolq_200s_gdpo_v6_qwen25_14b/` (eval **2805602**). NED 0.150 (median, NED>0) is notably lower than the ckpt-200 partial (0.249), suggesting the full training teaches more minimal edits.
 GRPO: `grpo_model_boolq_1ep_g16_multi_qwen25_14b_boolq_mv2` → `evaluation_boolq_200s_grpo_mv2_g16_qwen25_14b/` (train **2777920**, eval **2794877**).
 SFT: `sft_model_boolq_2pair_b4_ml2048_200step_qwen25_14b` → `evaluation_boolq_200s_sft_2pair_b4_ml2048_200step_qwen25_14b/` (train **2780681**, eval **2781361**).
 GDPO v6 ckpt-200: partial result (OOM at ~0.22ep); superseded by full-epoch eval above.
-DPO: `dpo_model_boolq_2000e40c_1pair_qwen25_14b` → `evaluation_boolq_200s_dpo_1pair_b4_2ep_qwen25_14b/` (eval **2777870**).
+DPO 1pair: `dpo_model_boolq_2000e40c_1pair_qwen25_14b` → `evaluation_boolq_200s_dpo_1pair_b4_2ep_qwen25_14b/` (eval **2777870**). DPO 2pair lr=1e-5: `evaluation_boolq_200s_dpo_2pair_lr1e5_qwen25_14b/` — +2.9%, same as GRPO single but DPO 1pair with default lr only reaches +0.3%; lr=1e-5 helps but still below SimPO/GDPO.
 
 ### SNLI-Premise (14B)
 
 | Method | Config        | Duration | LFR   | ΔLFR   | NED   | PPL  | Fair | N   |
 | ------ | ------------- | -------- | ----- | ------ | ----- | ---- | ---- | --- |
-| GDPO v6| g16 bs4       | 1.0ep    | 89.6% | +26.2% | 0.361 | 79.2 | yes  | 200 |
-| SimPO  | 2pair b4 β3γ0.5 | 2ep    | 84.0% | +21.5% | 0.421 | 92.0 | yes  | 200 |
-| GRPO   | mv2 g16 v2fix | 1.0ep    | 78.0% | +15.0% | 0.311 | 82.6 | yes  | 200 |
-| DPO    | 2pair b4      | 2ep      | 69.4% | +6.6%  | 0.318 | 83.1 | yes  | 200 |
-| GDPO v6| g16 bs8   | ckpt-500 | 69.7% | +6.6%  | 0.316 | 93.1 | yes  | 200 |
-| SFT    | 2pair b16     | 1ep      | 63.1% | -0.0%  | 0.321 | 98.9 | yes  | 200 |
-| GRPO   | v2 g16 (single) | 1ep    | training (**2819416**) | | | | | |
+| GRPO   | mv2 g16       | 1.0ep    | 92.8% | +29.4% | 0.389 | 44.2 | yes  | 200 |
+| GDPO v6| g16 bs4       | 1.0ep    | 89.6% | +26.2% | 0.352 | 52.9 | yes  | 200 |
+| SimPO  | 2pair b4 β2γ0.5 | 2ep   | 85.7% | +22.7% | 0.413 | 50.5 | yes  | 200 |
+| SimPO  | 2pair b4 β3γ0.5 | 2ep    | 84.0% | +21.5% | 0.421 | 52.8 | yes  | 200 |
+| GRPO   | v2 g16 (single) | 1ep    | 85.6% | +22.7% | 0.336 | 43.5 | yes  | 200 |
+| DPO    | 2pair b4 lr=1e-5 | 2ep   | 78.7% | +15.6% | 0.362 | 70.9 | yes  | 200 |
+| GRPO   | mv2 g16 v2fix | 1.0ep    | 78.0% | +15.0% | 0.311 | 45.2 | yes  | 200 |
+| DPO    | 2pair b4      | 2ep      | 69.4% | +6.6%  | 0.318 | 50.4 | yes  | 200 |
+| DPO    | 1pair b4 lr=2e-6 | 2ep   | 63.6% | +0.6%  | 0.309 | 49.5 | yes  | 200 |
+| GDPO v6| g16 bs8   | ckpt-500 | 69.7% | +6.6%  | 0.316 | 48.9 | yes  | 200 |
+| SFT    | 2pair b16     | 1ep      | 63.1% | -0.0%  | 0.321 | 50.9 | yes  | 200 |
 
-GDPO v6 full epoch: `gdpo_model_snli_premise_1ep_g16_qwen25_14b_v6` (resumed to ckpt-4000, bs=4) → `evaluation_snli_premise_200s_gdpo_v6_qwen25_14b/` (eval **2805603**). Note: total_cfs 607 vs base 1288 (47% parse rate) — high self-selection; model only outputs CFs when highly confident they flip. Best 14B result.
+GRPO mv2 original: `grpo_model_snli_premise_1ep_g16_multi_qwen25_14b` → `evaluation_snli_premise_200s_grpo_mv2g16_qwen25_14b/`. **+29.4%** — best 14B SNLI-P result overall, surpassing GDPO. Note: the v2fix retrain (`grpo_mv2g16_v2fix`) scored only +15.0-15.5%, suggesting the original training was superior.
+GDPO v6 full epoch: `gdpo_model_snli_premise_1ep_g16_qwen25_14b_v6` (resumed to ckpt-4000, bs=4) → `evaluation_snli_premise_200s_gdpo_v6_qwen25_14b/` (eval **2805603**). Note: total_cfs 607 vs base 1288 (47% parse rate) — high self-selection; model only outputs CFs when highly confident they flip.
 SimPO: `dpo_model_snli_premise_2pair_b4_2ep_simpo_b3_g05_qwen25_14b` → `evaluation_snli_premise_200s_simpo_b3g05_qwen25_14b/` (train **2777926**, eval **2781365**).
-GRPO: `grpo_model_snli_premise_1ep_g16_multi_qwen25_14b_v2fix` → `evaluation_snli_premise_200s_grpo_mv2_g16_qwen25_14b_v2fix/` (train **2773359**, eval **2777871**).
-DPO: `dpo_model_snli_premise_2pair_b4_2ep_qwen25_14b` → `evaluation_snli_premise_200s_dpo_2pair_b4_2ep_qwen25_14b/` (train **2777924**, eval **2781363**).
+GRPO v2fix: `grpo_model_snli_premise_1ep_g16_multi_qwen25_14b_v2fix` → `evaluation_snli_premise_200s_grpo_mv2_g16_qwen25_14b_v2fix/` (train **2773359**, eval **2777871**).
+DPO lr=1e-5: `dpo_model_snli_premise_2pair_lr1e5_qwen25_14b` → `evaluation_snli_premise_200s_dpo_2pair_lr1e5_qwen25_14b/` (train **2896333**, eval **2896334**). **+15.6%** — more than doubles the default-lr DPO result (+6.6%), confirming lr=1e-5 is optimal for 14B DPO on SNLI.
+DPO default: `dpo_model_snli_premise_2pair_b4_2ep_qwen25_14b` → `evaluation_snli_premise_200s_dpo_2pair_b4_2ep_qwen25_14b/` (train **2777924**, eval **2781363**).
 GDPO v6 ckpt-500: partial; superseded by full-epoch eval above.
 SFT: `sft_model_snli_premise_2pair_b16_1ep_qwen25_14b` → `evaluation_snli_premise_200s_sft_2pair_b16_1ep_qwen25_14b/` (train **2780682**, eval **2781362**).
 
@@ -343,81 +388,217 @@ SFT: `sft_model_snli_premise_2pair_b16_1ep_qwen25_14b` → `evaluation_snli_prem
 
 | Method | Config    | Duration | LFR   | ΔLFR   | NED   | PPL   | Fair | N   |
 | ------ | --------- | -------- | ----- | ------ | ----- | ----- | ---- | --- |
-| SimPO  | 2pair b4 β3γ0.5 | 2ep | 89.9% | +13.7% | 0.426 | 352.4 | yes  | 200 |
-| GRPO   | mv2 g16   | 1.0ep    | 85.5% | +9.2%  | 0.454 | 242.6 | yes  | 200 |
-| GDPO   | v6 g16 v2fix | 1.0ep | 85.0% | +8.8%  | 0.439 | 241.9 | yes  | 200 |
-| SFT    | 2pair b4  | 2ep      | 80.2% | +3.9%  | 0.482 | 186.9 | yes  | 200 |
-| DPO    | 2pair b4  | 2ep      | 76.7% | +0.7%  | 0.467 | 167.3 | yes  | 200 |
-| GRPO   | v2 g16 (single) | 1ep | training (**2819417**) | | | | | |
+| GRPO   | mv2 g16 lr=2e-6 | ckpt12800 (~80%) | 91.1% | +14.9% | 0.462 | 126.5 | yes | 200 |
+| SimPO  | 2pair b4 β3γ0.5 | 2ep | 89.9% | +13.7% | 0.424 | 95.1  | yes  | 200 |
+| GRPO   | v2 g16 (single) | 1ep | 87.7% | +11.6% | 0.467 | 108.0 | yes  | 200 |
+| SimPO  | 2pair b4 β2γ0.5 | 2ep | 87.7% | +11.4% | 0.398 | 89.4  | yes  | 200 |
+| GRPO   | mv2 g16   | 1.0ep    | 85.5% | +9.2%  | 0.454 | 94.5  | yes  | 200 |
+| GDPO   | v6 g16 v2fix | 1.0ep | 85.0% | +8.8%  | 0.452 | 93.9  | yes  | 200 |
+| GDPO   | v6 g16    | ckpt1000 | 84.0% | +8.0%  | 0.445 | 93.0  | yes  | 200 |
+| DPO    | 2pair b4 lr=1e-5 | 2ep | 82.9% | +6.8%  | 0.471 | 194.4 | yes  | 200 |
+| SFT    | 2pair b4  | 2ep      | 80.2% | +3.9%  | 0.500 | 83.7  | yes  | 200 |
+| GRPO   | v2 g16 (single) lr=2e-6 | ckpt8700 (~54%) | 80.3% | +4.2% | 0.481 | 79.0  | yes  | 200 |
+| DPO    | 2pair b4  | 2ep      | 76.7% | +0.7%  | 0.467 | 78.2  | yes  | 200 |
+| DPO    | 2pair b4 lr=2e-6 | 2ep | 74.1% | -2.2%  | 0.478 | 76.5  | yes  | 200 |
 
-SimPO: `dpo_model_snli_hypothesis_2pair_b4_2ep_simpo_b3_g05_qwen25_14b` → `evaluation_snli_hypothesis_200s_simpo_b3g05_qwen25_14b/` (train **2777927**, eval **2781366**).
+SimPO β=3: `dpo_model_snli_hypothesis_2pair_b4_2ep_simpo_b3_g05_qwen25_14b` → `evaluation_snli_hypothesis_200s_simpo_b3g05_qwen25_14b/` (train **2777927**, eval **2781366**).
+SimPO β=2: `evaluation_snli_hypothesis_200s_simpo_b2g05_qwen25_14b/`. **+11.4%** — β=2 and β=3 both strong, nearly identical LFR, lower NED for β=2.
 GRPO: `grpo_model_snli_hypothesis_1ep_g16_multi_qwen25_14b_snli_h_mv2` → `evaluation_snli_hypothesis_200s_grpo_mv2_g16_qwen25_14b/` (train **2777921**, eval **2794878**).
-GDPO: `gdpo_model_snli_hypothesis_1ep_g16_qwen25_14b_v6_v2fix` → `evaluation_snli_hypothesis_200s_gdpo_v6_qwen25_14b_v2fix/` (eval **2777872**).
+GDPO: `gdpo_model_snli_hypothesis_1ep_g16_qwen25_14b_v6_v2fix` → `evaluation_snli_hypothesis_200s_gdpo_v6_qwen25_14b_v2fix/` (eval **2777872**). ckpt1000: `evaluation_snli_hypothesis_200s_gdpo_v6_ckpt1000_qwen25_14b/` (+8.0%, slightly below full epoch).
 SFT: `sft_model_snli_hypothesis_2pair_b4_2ep_qwen25_14b` → `evaluation_snli_hypothesis_200s_sft_2pair_qwen25_14b/` (train **2786445**, eval **2794799**).
-DPO: `dpo_model_snli_hypothesis_2pair_b4_2ep_qwen25_14b` → `evaluation_snli_hypothesis_200s_dpo_2pair_b4_2ep_qwen25_14b/` (train **2777925**, eval **2781364**).
+DPO lr=1e-5: `dpo_model_snli_hypothesis_2pair_lr1e5_qwen25_14b` → `evaluation_snli_hypothesis_200s_dpo_2pair_lr1e5_qwen25_14b/` (train **2896335**, eval **2896336**). **+6.8%** — nearly 10× improvement over default-lr DPO (+0.7%).
+DPO default: `dpo_model_snli_hypothesis_2pair_b4_2ep_qwen25_14b` → `evaluation_snli_hypothesis_200s_dpo_2pair_b4_2ep_qwen25_14b/` (train **2777925**, eval **2781364**).
 **14B matrix complete** (all 5 methods × 3 datasets evaluated). GDPO BoolQ and SNLI-P partial-checkpoint results will be superseded by full-epoch evals (**2805602**, **2805603**).
 
 ---
 
 ## Qwen2.5-3B-Instruct
 
-All rows below use **Qwen/Qwen2.5-3B-Instruct** as generator and judge. Same pipeline as 14B: QLoRA 4-bit, RTXA6000/RTXA6000-SLT, fair-base anchors via `run_eval_3b_fair.sh`. The first eval per dataset (DPO) establishes the anchor; subsequent evals reuse it via `--base_eval_dir`. Anchors: BoolQ → `evaluation_boolq_200s_dpo_1pair_qwen25_3b/`, SNLI-P → `evaluation_snli_premise_200s_dpo_1pair_qwen25_3b/`, SNLI-H → `evaluation_snli_hypothesis_200s_dpo_1pair_qwen25_3b/`.
+All rows below use **Qwen/Qwen2.5-3B-Instruct** as generator and judge. QLoRA 4-bit, RTXA6000/RTXA6000-SLT, fair-base anchors via `run_eval_3b_fair.sh`. Anchors: BoolQ/SNLI-P/SNLI-H → `evaluation_{ds}_200s_dpo_1pair_qwen25_3b/`. PPL = **median** (robust to outliers). Fair reruns (jobs 2891873–2891916) completed May 2026; rows updated to confirmed fair values.
 
 ### BoolQ (3B)
 
-Base LFR 30.5% (notably lower than 7B 37.2% / 14B 54.9% — 3B struggles with boolean reasoning). Anchor established via DPO eval.
+Base LFR 30.5%. Anchor: `evaluation_boolq_200s_dpo_1pair_qwen25_3b/`.
 
-| Method  | Config          | Duration | LFR   | ΔLFR  | NED   | PPL  | Fair | N   |
-| ------- | --------------- | -------- | ----- | ----- | ----- | ---- | ---- | --- |
-| DPO     | 1pair b4        | 200step  | 30.5% | +0.0% | 0.211 | 13.1 | yes  | 200 |
-| SimPO   | 2pair b4 β3γ0.5 | 2ep      | pending (**2819352**) | | | | | |
-| SFT     | 2pair 200step   |          | pending (**2819353**) | | | | | |
-| GRPO    | mv2 g16         | 1ep      | pending (**2819354**) | | | | | |
-| GRPO    | v2 g16 (single) | 1ep      | training (**2819412**) | | | | | |
-| GDPO v6 | g16 bs8 ckpt-100| ~1.6ep   | pending (**2819409**) | | | | | |
-| GDPO v6 | g16 bs8 5ep     | 5ep      | retraining (**2819410**) | | | | | |
-
-DPO +0.0% is striking — the 3B model cannot learn meaningful BoolQ counterfactuals from DPO pairs alone. BoolQ requires boolean reasoning beyond 3B capacity. Results for other methods pending anchor eval completion.
+| Method  | Config              | LFR   | ΔLFR    | NED   | Med PPL | Fair  | N   |
+| ------- | ------------------- | ----- | ------- | ----- | ------- | ----- | --- |
+| GRPO    | v2 g16 (single) lr=1e-5 1ep | 41.6% | +10.4% | 0.090 | 11.4    | yes   | 200 |
+| GRPO    | mv2 g16 lr=1e-5 1ep | 38.6% | +7.6%   | 0.089 | 11.6    | yes   | 200 |
+| GRPO    | mv2 g16 1ep         | 36.6% | +6.0%   | 0.234 | 9.8     | yes   | 200 |
+| GRPO    | v2 g16 (single) 1ep | 36.2% | +5.6%   | 0.245 | 9.9     | yes   | 200 |
+| SimPO   | 2pair b4 β2γ0.5     | 34.6% | +3.5%   | 0.221 | 10.7    | yes   | 200 |
+| SFT     | 2pair 200step       | 31.5% | +1.0%   | 0.271 | 11.0    | yes   | 200 |
+| DPO     | 1pair b4 200step    | 30.5% | +0.0%   | 0.145 | 9.6     | yes   | 200 |
+| DPO     | 1pair b4 2ep        | 29.4% | −1.1%   | 0.142 | 9.7     | yes   | 200 |
+| GDPO v6 | g16 bs8 ckpt100 (~1.6ep) | 31.7% | +1.1% | 0.314 | 11.0  | ~yes(−0.3pp) | 200 |
+| GDPO v6 | g16 bs8 ~1.6ep      | 30.4% | −0.1%   | 0.316 | 10.8    | yes   | 200 |
+| SimPO   | 2pair b4 β3γ0.5     | 17.5% | −13.0%  | 0.503 | 23.4    | yes   | 200 |
 
 ### SNLI-Premise (3B)
 
-Base LFR ~32.6% (much lower than 7B 52% / 14B 63% — 3B struggles with NLI reasoning). Anchor: `evaluation_snli_premise_200s_dpo_1pair_qwen25_3b/`.
+Base LFR 32.6%. Anchor: `evaluation_snli_premise_200s_dpo_1pair_qwen25_3b/`.
 
-| Method  | Config          | Duration | LFR   | ΔLFR   | NED   | PPL  | Fair | N   |
-| ------- | --------------- | -------- | ----- | ------ | ----- | ---- | ---- | --- |
-| SimPO   | 2pair b4 β3γ0.5 | 2ep      | 59.9% | +25.5% | 0.309 | 95.1  | yes  | 200 |
-| GDPO v6 | g16 bs8         | 1ep      | 50.6% | +17.5% | 0.269 | 76.3  | yes  | 200 |
-| DPO     | 1pair b4        | 200step  | 40.4% | +7.9%  | 0.228 | 83.1  | yes  | 200 |
-| SFT     | 2pair 200step   |          | 37.7% | +5.2%  | 0.229 | 86.5  | yes  | 200 |
-| GRPO    | mv2 g16         | 1ep      | pending (**2819355**) | | | | | |
-| GRPO    | v2 g16 (single) | 1ep      | training (**2819413**) | | | | | |
-
-GDPO 3B SNLI-P +17.5%: strong result for a 3B model — nearly matches 7B GDPO v6 (+15.7%) and well ahead of 3B DPO/SFT.
+| Method  | Config               | LFR   | ΔLFR    | NED   | Med PPL | Fair  | N   |
+| ------- | -------------------- | ----- | ------- | ----- | ------- | ----- | --- |
+| SimPO   | 2pair b4 β3γ0.5      | 58.6% | +24.4%  | 0.308 | 94.2    | yes   | 200 |
+| GRPO    | mv2 g16 lr=1e-5 1ep  | 58.8% | +25.2%  | 0.333 | 72.9    | yes   | 200 |
+| GDPO v6 | g16 bs8 1ep          | 50.4% | +17.1%  | 0.263 | 79.0    | yes   | 200 |
+| GRPO    | v2 g16 (single) lr=1e-5 1ep | 61.1% | +27.7%  | 0.346 | 66.2    | yes   | 200 |
+| GRPO    | v2 g16 (single) 1ep  | 49.4% | +16.9%  | 0.235 | 44.3    | yes   | 200 |
+| DPO     | 2pair b4 2ep lr=1e-5 | 44.6% | +10.6%  | 0.254 | 82.3    | yes   | 200 |
+| GRPO    | mv2 g16 lr=2e-6 1ep  | 41.2% | +8.6%   | 0.225 | 46.7    | yes   | 200 |
+| DPO     | 1pair b4 200step     | 40.4% | +7.9%   | 0.228 | 47.2    | yes   | 200 |
+| SFT     | 2pair 200step        | 37.7% | +5.2%   | 0.229 | 47.0    | yes   | 200 |
 
 ### SNLI-Hypothesis (3B)
 
-Base LFR 48.1% (similar to 7B 44%). Anchor: `evaluation_snli_hypothesis_200s_dpo_1pair_qwen25_3b/`.
+Base LFR 48.1%. Anchor: `evaluation_snli_hypothesis_200s_dpo_1pair_qwen25_3b/`.
 
-| Method  | Config          | Duration | LFR   | ΔLFR   | NED   | PPL    | Fair | N   |
-| ------- | --------------- | -------- | ----- | ------ | ----- | ------ | ---- | --- |
-| GDPO v6 | g16 bs8         | 1ep      | 61.9% | +13.6% | 0.409 | 203.9  | yes  | 200 |
-| SimPO   | 2pair b4 β3γ0.5 | 2ep      | 54.9% | +6.8%  | 0.381 | 2672   | yes  | 200 |
-| SFT     | 2pair 200step   |          | 51.2% | +3.1%  | 0.396 | 174.5  | yes  | 200 |
-| DPO     | 1pair b4        | 200step  | 50.0% | +1.9%  | 0.374 | 131.6  | yes  | 200 |
-| GRPO    | mv2 g16         | 1ep      | pending (**2819356**) | | | | | |
-| GRPO    | v2 g16 (single) | 1ep      | training (**2819414**) | | | | | |
-
-GDPO v6 3B SNLI-H +13.6%: **best 3B result on SNLI-H by a wide margin** (+6.8pp over SimPO). SimPO SNLI-H PPL=2672 exceeds the 650 cap — excluded from visual summary. 3B produces less fluent SNLI-H edits than 7B/14B at most methods, but GDPO maintains reasonable PPL (203.9).
-
-**Training / eval status (3B):**
-
-| Dataset     | DPO                  | SimPO                | SFT                  | GRPO multi           | GRPO single           | GDPO v6               |
-| ----------- | -------------------- | -------------------- | -------------------- | -------------------- | --------------------- | --------------------- |
-| BoolQ       | ✓ +0.0%              | eval pending **2819352** | eval pending **2819353** | eval pending **2819354** | training **2819412** | 5ep retraining **2819410**; ckpt-100 eval **2819409** |
-| SNLI-Premise| ✓ +7.9%              | ✓ +25.5%             | ✓ +5.2%              | eval pending **2819355** | training **2819413** | ✓ +17.5%              |
-| SNLI-H      | ✓ +1.9%              | ✓ +6.8% (PPL excl.)  | ✓ +3.1%              | eval pending **2819356** | training **2819414** | ✓ +13.6%              |
+| Method  | Config               | LFR   | ΔLFR    | NED   | Med PPL | Fair  | N   |
+| ------- | -------------------- | ----- | ------- | ----- | ------- | ----- | --- |
+| GDPO v6 | g16 bs8 ~0.75ep (fair) | 63.7% | +15.2%  | 0.496 | 68.3  | yes   | 200 |
+| GDPO v6 | g16 bs8 ~0.75ep      | 62.5% | +14.0%  | 0.418 | 68.6    | no    | 200 |
+| GDPO v6 | g16 bs8 1ep          | 61.9% | +13.6%  | 0.409 | 68.1    | yes   | 200 |
+| GDPO v6 | g16 bs8 ckpt1000     | 60.4% | +12.0%  | 0.401 | 66.5    | yes   | 200 |
+| SimPO   | 2pair b4 β3γ0.5      | 55.3% | +7.2%   | 0.379 |  92.8   | yes   | 200 |
+| SimPO   | 2pair b4 β2γ0.5      | 53.2% | +5.1%   | 0.366 | 236.6   | yes   | 200 |
+| DPO     | 2pair b4 2ep lr=1e-5 | 55.8% | +7.3%   | 0.415 |  65.4   | yes   | 200 |
+| GRPO    | mv2 g16 lr=1e-5 1ep  | 56.7% | +7.3%   | 0.375 | 100.7   | yes   | 200 |
+| GRPO    | mv2 g16 1ep (fair2)  | 55.7% | +7.1%   | 0.278 |  83.9   | yes   | 200 |
+| GRPO    | mv2 g16 1ep          | 53.9% | +5.2%   | 0.280 | 82.2    | no    | 200 |
+| SimPO   | 2pair b4 β2γ0.5      | 51.4% | +3.3%   | 0.372 | 74.4    | yes   | 200 |
+| SFT     | 2pair 200step        | 51.2% | +3.1%   | 0.459 | 67.9    | yes   | 200 |
+| GRPO    | v2 g16 (single) lr=1e-5 1ep | 54.0% | +6.3% | 0.348 | 80.9 | yes  | 200 |
+| GRPO    | v2 g16 (single) 1ep (fair) | 50.9% | +2.3%  | 0.298 | 215.5 | yes | 200 |
+| GRPO    | v2 g16 (single) 1ep  | 51.3% | +3.0%   | 0.288 | 81.4    | no    | 200 |
+| DPO     | 2pair b4 2ep         | 50.4% | +2.1%   | 0.379 | 174.8   | yes   | 200 |
+| DPO     | 1pair b4 200step     | 50.0% | +1.9%   | 0.374 | 67.4    | yes   | 200 |
 
 ---
+
+## Llama-3.1-8B-Instruct
+
+All rows use `meta-llama/Llama-3.1-8B-Instruct` as generator and judge. QLoRA 4-bit, H200/A100-80GB (GDPO bs8 matches 7B/3B fairness). Anchors: all datasets → `evaluation_{ds}_200s_dpo_1pair_llama31_8b/`. PPL = **median**. GRPO SNLI training projected ~170h/epoch — partial results reported. Rows marked "rerun" used independently generated base CFs; bias shown in parentheses.
+
+Base LFRs: BoolQ 53.7% · SNLI-P 43.2% · SNLI-H 56.4%
+
+### BoolQ (Llama)
+
+| Method  | Config              | LFR   | ΔLFR    | NED   | Med PPL | Fair              | N   |
+| ------- | ------------------- | ----- | ------- | ----- | ------- | ----------------- | --- |
+| GDPO v6 | g16 bs8 ckpt500     | 71.0% | +17.3%  | 0.348 | 13.1    | yes               | 200 |
+| GDPO v6 | g16 bs8 ckpt700     | 69.8% | +16.2%  | 0.373 | 30.3    | yes               | 200 |
+| GDPO v6 | g16 bs8 1ep         | 70.1% | +16.4%  | 0.370 | 13.5    | yes               | 200 |
+| GDPO v6 | g16 bs8 ckpt300     | 68.1% | +14.5%  | 0.386 | 224.6   | yes               | 200 |
+| DPO     | 2pair b4 lr=1e-5    | 66.0% | +11.5%  | 0.101 | 8.7     | yes               | 200 |
+| SimPO   | 2pair b4 β2γ0.5 lr=2e-6 | 63.5% | +9.5%  | 0.083 | 8.5  | yes               | 200 |
+| SimPO   | 2pair b4 β3γ0.5 lr=2e-6 | 62.0% | +7.9%  | 0.118 | 8.8  | yes               | 200 |
+| DPO     | 1pair b4 lr=1e-5    | 57.1% | +3.4%   | 0.330 | 11.8    | yes (5% parse⚠)   | 200 |
+| DPO     | 1pair b4 lr=1e-5 (v2)| 55.5% | +2.0%  | 0.315 | 11.2    | yes               | 200 |
+| SFT     | 2pair 200step       | 53.9% | +0.3%   | 0.279 | 67.4    | yes                     | 200 |
+| GRPO    | mv2 g16 mcl768 ckpt1600 | 66.9% | +13.2% | 0.326 | 15.5    | yes               | 200 |
+| GRPO    | v2 g16 ckpt200 (~2%) | 51.7% | −1.4%  | 0.325 | 13.0    | yes                     | 200 |
+| GRPO    | v2 g16 mcl768 v2 ckpt1800 (~22%) | 60.4% | +6.7%  | 0.221 | 12.3    | yes                     | 200 |
+| GRPO    | v2 g16 mcl768 v2 ckpt1500 (~19%) | 60.2% | +6.5%  | 0.270 | 11.9    | yes                     | 200 |
+| GRPO    | v2 g16 mcl768 v2 ckpt2100 (~26%) | 59.0% | +5.2%  | 0.246 | 12.2    | yes                     | 200 |
+| GRPO    | v2 g16 mcl768 v2 ckpt2500 (~31%) | 57.9% | +4.4%  | 0.239 | 12.0    | yes                     | 200 |
+| GRPO    | v2 g16 mcl768 v2 ckpt3000 (~37%) | 57.5% | +3.8%  | 0.243 | 11.8    | yes                     | 200 |
+| GRPO    | v2 g16 mcl768 v2 ckpt3500 (~44%) | 56.3% | +2.6%  | 0.201 | 10.6    | yes                     | 200 |
+| GRPO    | v2 g16 mcl768 v2 ckpt1200 (~15%) | 57.2% | +3.5%  | 0.287 | 12.1    | yes                     | 200 |
+| GRPO    | v2 g16 mcl768 v2 ckpt600 (~7%)  | 51.2% | −2.5%  | 0.323 | 12.6    | yes                     | 200 |
+| GRPO    | v2 g16 mcl768 v2 ckpt200 (~2%)  | 53.7% | −0.0%  | 0.322 | 12.7    | yes                     | 200 |
+| GRPO    | mv2 g16 ckpt400 (~5%)| 52.0% | −1.0%  | 0.327 | 13.0    | yes                     | 200 |
+| GRPO    | mv2 g16 ckpt200 (~2%)| 51.1% | −2.0%  | 0.318 | 13.0    | yes                     | 200 |
+| GRPO    | v2 g16 ckpt400 (~5%) | 50.5% | −2.6%  | 0.326 | 13.0    | yes                     | 200 |
+| GRPO    | v2 g16 ~1ep         | 44.6% | −9.9%   | 0.097 | 20.0    | yes                     | 200 |
+| GRPO    | mv2 g16 ~1ep        | 32.5% | −21.9%  | 0.031 | 10.5    | yes                     | 200 |
+| GRPO    | mv2 g16 lr=1e-5 ~1ep|  8.9% | −46.8%  | 0.004 | 10.4    | rerun             | 200 |
+
+### SNLI-Premise (Llama)
+
+**Charts feature the best run per method (healthy parse).** For DPO that is now `2pair b4 lr=2e-6` **+2.4%** (84% parse, base 43.2→45.6%) — the proven 2pair recipe at gentle lr (jobs 3013355/3013665), beating the old `1pair` +0.4% and avoiding the `lr=1e-5` parse collapse (+10.3% @ 4% parse, excluded). GRPO single ckpt7500 **+32.5%** is the genuine best.
+
+| Method  | Config                  | LFR   | ΔLFR    | NED   | Med PPL | Fair              | N   |
+| ------- | ----------------------- | ----- | ------- | ----- | ------- | ----------------- | --- |
+| GRPO    | v2 g16 ckpt7500 (~47%)  | 74.6% | +32.5%  | 0.290 | 87.6    | yes               | 200 |
+| GRPO    | v2 g16 ckpt7500 (_fair rerun) | 73.4% | +31.3%  | 0.299 | 97.8    | yes (stochasticity — original above is best) | 200 |
+| GRPO-fair| mv2 ckpt7000 (~44%)    | 71.5% | +29.0%  | 0.348 | 1706.9  | yes               | 200 |
+| GRPO-fair| mv2 ckpt4500 (~28%)    | 70.5% | +28.0%  | 0.343 | 120.8   | yes               | 200 |
+| GRPO    | v2 g16 ckpt10100 (~63%) | 73.1% | +30.4%  | 0.295 | 114.1   | yes               | 200 |
+| GRPO    | v2 g16 ckpt8500 (~53%)  | 71.0% | +28.1%  | 0.300 | 63.0    | yes               | 200 |
+| GRPO-fair| mv2 ckpt11200 (~70%)   | 71.6% | +29.2%  | 0.331 | 138.8   | yes               | 200 |
+| GRPO    | v2 g16 ckpt5600 (~35%)  | 65.4% | +22.9%  | 0.325 | 70.8    | yes               | 200 |
+| SimPO   | 2pair b4 β3γ0.5 lr=2e-6 | 62.2% | +18.6%  | 0.423 | 89.9    | yes               | 200 |
+| SimPO   | 2pair b4 β2γ0.5 lr=2e-6 | 61.2% | +17.4%  | 0.409 | 89.6    | yes               | 200 |
+| GDPO v6 | g16 bs8 ckpt500         | 54.4% | +11.4%  | 0.463 | 107.5   | yes               | 200 |
+| DPO     | 1pair b4 lr=1e-5        | 53.5% | +10.3%  | 0.368 | 102.7   | yes (4% parse⚠)   | 200 |
+| GDPO v6 | g16 bs8 1ep             | 53.8% | +10.6%  | 0.364 | 96.1    | yes               | 200 |
+| GDPO v6 | g16 bs8 ckpt1000        | 51.3% | +8.4%   | 0.364 | 94.9    | yes               | 200 |
+| SFT     | 2pair 200step           | 45.7% | +2.5%   | 0.468 | 102.9   | yes                     | 200 |
+| GRPO    | mv2 g16 ckpt2000 (~12%) | 46.6% | +3.2%   | 0.479 | 112.0   | yes               | 200 |
+| GRPO    | mv2 g16 ckpt3000 (~19%) | 46.2% | +2.7%   | 0.475 | 113.0   | yes               | 200 |
+| GRPO    | mv2 g16 ckpt4000 (~25%) | 46.2% | +2.9%   | 0.482 | 113.1   | yes               | 200 |
+| GRPO    | mv2 g16 ckpt5000 (~31%) | 45.5% | +2.0%   | 0.480 | 116.0   | yes               | 200 |
+| GRPO    | mv2 g16 ckpt6000 (~37%) | 45.2% | +1.7%   | 0.477 | 112.0   | yes               | 200 |
+| GRPO    | mv2 g16 ckpt7000 (~44%) | 44.7% | +1.2%   | 0.478 | 112.0   | yes               | 200 |
+| DPO     | 1pair b4 lr=5e-6        | 43.6% | +0.4%   | 0.388 | 119.5   | yes (anchor)      | 200 |
+| GRPO    | mv2 g16 lr=2e-6 ckpt11700 (~73%) | 46.4% | +3.7%  | 0.410 | 100.0  | yes               | 200 |
+| GRPO    | mv2 g16 ckpt1000 (~6%)  | 43.3% | +0.2%   | 0.443 | 113.0   | yes               | 200 |
+| GRPO    | mv2 g16 ckpt8400 (~52%) | 43.3% | −0.2%   | 0.477 | 731.7   | yes               | 200 |
+| DPO     | 2pair b4 lr=1e-5        | 34.1% | −9.1%   | 0.428 | 133.9   | yes (3% parse⚠)   | 200 |
+
+### SNLI-Hypothesis (Llama)
+
+**Charts feature the best run per offline method (checkpoint sweep, healthy parse):** SFT `ckpt100` **+0.6%** (80% parse — clears base; full 200step was −1.4%), SimPO `β3γ0.5 lr=2e-6` **+0.7%** (70% parse), DPO `2p lr=2e-6 ckpt100` **−0.8%** (best of the full 100→1992 lr/checkpoint sweep at beta=0.1 — **every checkpoint ≤ base**). The higher-ΔLFR variants — SimPO β2 **+11.6%** (4.6% parse), DPO lr=2e-5 **+9.1%** (2.3% parse), SFT 2ep **+2.8%** (11% parse) — are **parse-collapse artifacts** and are excluded. **GRPO multi +9.6%** (ckpt14900, 66% parse) is the genuine best (a lr=1e-5 GRPO retrain was eval-infeasible — degenerate slow generation). **In flight:** a DPO **beta sweep** (β0.3/β0.5 at lr=2e-6, sigmoid; jobs 3118959–62) to lift DPO to ≥ 0 via a standard hyperparameter, not a pair rebuild.
+
+| Method  | Config                   | LFR   | ΔLFR    | NED   | Med PPL | Fair              | N   |
+| ------- | ------------------------ | ----- | ------- | ----- | ------- | ----------------- | --- |
+| SimPO   | 2pair b4 β2γ0.5          | 68.5% | +11.6%  | 0.571 | 564.7   | yes               | 200 |
+| GRPO    | mv2 g16 ckpt14900 (~93%) | 67.3% | +9.6%   | 0.405 | 183.4   | yes               | 200 |
+| DPO     | 2pair b4 lr=2e-5         | 67.4% | +9.1%   | 0.658 |  79.7   | yes               | 200 |
+| GDPO v6 | g16 bs8 ckpt1000         | 62.4% | +6.2%   | 0.559 | 160.6   | yes               | 200 |
+| GDPO v6 | g16 bs8 ckpt1500         | 62.5% | +6.0%   | 0.516 | 155.4   | yes               | 200 |
+| GDPO v6 | g16 bs8 ckpt500          | 63.3% | +5.7%   | 0.561 | 174.2   | yes               | 200 |
+| GDPO v6 | g16 bs8 1ep              | 62.0% | +5.5%   | 0.525 | 154.2   | yes               | 200 |
+| GRPO    | v2 g16 ckpt6000 (~37%)   | 59.7% | +3.4%   | 0.463 | 148.5   | yes (same anchor as _fair run; higher-scoring variant) | 200 |
+| SFT     | 2pair 2ep                | 62.2% | +2.8%   | 0.571 | 203.7   | yes (note: _fair rerun dir shows −6.5% due to stale-resume bug — discard) | 200 |
+| GRPO    | v2 g16 ckpt4200 (~26%)   | 56.5% | +0.1%   | 0.542 | 490.8   | yes               | 200 |
+| DPO     | 2pair b4 lr=5e-5         | —     | ~−3.3%  | 0.621 | 310.2   | yes (INVALID — 18/2000 parse = 0.9%; model collapsed at lr=5e-5) | 200 |
+| SimPO   | 2pair b4 β3γ0.5 lr=2e-6  | 57.5% | +0.7%   | 0.490 | 214.3   | yes               | 200 |
+| DPO     | 2pair b4 lr=1e-5         | 56.8% | −0.6%   | 0.478 | 681.7   | yes               | 200 |
+| SFT     | 2pair 200step            | 55.0% | −1.4%   | 0.538 | 146.0   | yes               | 200 |
+| DPO     | 2pair b4 lr=2e-6         | 54.1% | −2.3%   | 0.504 | 741.3   | yes               | 200 |
+| DPO     | 2pair b4 lr=5e-6         | 53.3% | −3.4%   | 0.457 | 147.0   | yes               | 200 |
+| DPO     | 1pair b4 lr=5e-6         | 48.6% | −7.8%   | 0.447 | 148.6   | yes               | 200 |
+| GRPO    | v2 g16 ckpt7500 (~47%)   | 51.6% | −6.3%   | 0.297 | 1037.7  | yes               | 200 |
+| GRPO    | mv2 g16 ckpt5100 (~32%)  | 45.8% | −12.1%  | 0.238 | 380.5   | yes               | 200 |
+| DPO     | 1pair b4 lr=1e-5         | 43.7% | −13.2%  | 0.411 | 119.3   | yes               | 200 |
+| GRPO    | v2 g16 ckpt9000 (~56%)   | 49.5% | −8.2%   | 0.241 | 383.0   | yes               | 200 |
+| GRPO    | v2 g16 ckpt10500 (~66%)  | 40.8% | −17.5%  | 0.185 | 409.7   | yes               | 200 |
+| GRPO    | v2 g16 ckpt12000 (~75%)  | 37.7% | −20.3%  | 0.165 | 494.4   | yes               | 200 |
+| GRPO    | v2 g16 ckpt12900 (~81%)  | 39.4% | −18.6%  | 0.169 | 625.0   | yes               | 200 |
+| SimPO   | 2pair b4 β3γ0.5 (orig)   | 16.6% | −38.7%  | 0.650 | 60699.3 | yes (training diverged — collapse) | 200 |
+
+---
+
+## Active / Pending Jobs (submitted May 30, 2026)
+
+| Job ID | Name | Status |
+|--------|------|--------|
+| 3013001 | 7B BoolQ SimPO b3γ0.5 **fair re-eval** (canonical base `05b8d14619`) | ✅ COMPLETE. **+28.6%** (66.7% LFR, base 38.1%, NED 0.115, PPL 8.8, 68% parse). On the canonical base SimPO is the **7B BoolQ best**, ahead of DPO +22.1%. Chart/RESULTS/README updated; ⚠ removed. → `evaluation_boolq_200s_simpo_b3g05_fair/` |
+| 3013002 | Llama SNLI-H **GRPO multi-reward v2 g16 lr=1e-5** (train) | ✅ TRAINED to ckpt7400. Eval was never launched; checkpoint sweep submitted (3114894–3114897, see below). → `grpo_model_snli_hypothesis_1ep_g16_multi_mv2_lr1e5_llama31_8b/` |
+| 3114894–3114897 | Llama SNLI-H **GRPO multi lr=1e-5 eval sweep** (ckpt 2000/4000/6000/7400) | ❌ ABANDONED — eval-infeasible. The lr=1e-5 GRPO model generates pathologically slowly (~500–880 s/**sample**, degenerate long outputs); all 4 evals hit the 12 h wall at ~30–40% of 200 samples. Not worth re-running on a degenerate model: the cell is already **+9.6%** at default lr (GRPO multi ckpt14900), which stands as the cell best. |
+| 3116220–3116223 | Llama SNLI-H DPO beta sweep (first attempt) | ❌ FAILED — passed `LOSS_TYPE=dpo`, but `train_dpo.py` expects `sigmoid` for standard DPO. Resubmitted below. |
+| 3118959/3118960 (β0.3) · 3118961/3118962 (β0.5) | Llama SNLI-H **DPO beta sweep** lr=2e-6 `sigmoid` (train + chained eval) | 🔄 RUNNING (Jun 23). **Untested axis:** all prior Llama SNLI-H DPO runs used beta=0.1; higher beta anchors closer to the reference (more conservative) to lift the only below-base cell (−0.8%) to ≥ 0 *without* a pair rebuild (which would break cross-cell consistency). → `evaluation_snli_hypothesis_200s_dpo_2pair_lr2e6_beta{03,05}_llama31_8b/` |
+| 3013293–3013296 | Llama SNLI-H **DPO checkpoint sweep** (ckpt 100/300/600/1000) | ✅ COMPLETE. c100 **−0.8%**, c300 −1.5%, c600 −1.6%, c1000 −1.2% — **every checkpoint ≤ base**. Confirmed offline ceiling; chart updated to best (c100 −0.8%, 100% parse). |
+| 3013297–3013299 | Llama SNLI-H **SFT checkpoint sweep** (ckpt 50/100/150) | ✅ COMPLETE. c50 −1.3%, **c100 +0.6%** (80% parse — clears base), c150 +0.3%. Chart updated to c100 (was −1.4%). |
+| 3013300–3013302 | 14B SNLI-P **SFT checkpoint sweep** (ckpt 50/100/150) | ✅ COMPLETE. c50 −0.0%, c100 −0.7%, c150 −0.4% — flat at base even at earliest ckpt. **Genuine ceiling: SFT is inert on this cell.** |
+| 3013354 | Llama SNLI-P **DPO 2pair lr=5e-6** (train) | SUBMITTED. **Under-explored:** the 2pair recipe (7B SNLI-P DPO +24.5%) was never trained for Llama at sane lr — only 2pair lr=1e-5 (parse-collapse) and 1pair (+0.4%). lr=5e-6 = 7B's winning lr. → eval after train. |
+| 3013355 | Llama SNLI-P **DPO 2pair lr=2e-6** (train) | SUBMITTED. Same recipe at Llama's safe gentle lr (matches Llama SimPO +18.6% / GRPO that avoid collapse). → eval after train. |
+| 3013354/3013664 (lr5e6) · 3013355/3013665 (lr2e6) | Llama SNLI-P DPO 2pair train+eval | ✅ COMPLETE. **lr2e6 +2.4%** (84% parse, NED 0.411, PPL 96.9) — healthy, now the featured DPO for the cell (was 1p +0.4%). lr5e6 +2.2% but only 15% parse. Confirms the 2pair recipe transfers but Llama SNLI-P DPO stays modest (GRPO single +32.5% dominates). |
+| 3013675 / 3013676 | 3B BoolQ **DPO 2pair lr=5e-6** (train + eval) | ✅ COMPLETE. **−0.6%** (100% parse). The 2pair recipe does **not** help 3B BoolQ (1pair was +1.2% on its own base, anchor 0.0%). **Confirms "3B can't learn BoolQ offline"** holds under the stronger recipe. → `evaluation_boolq_200s_dpo_2pair_qwen25_3b/` |
+| 3013830 / 3013831 | 7B BoolQ **GRPO single lr=1e-5** (train + chained eval) | ✅ COMPLETE. **+21.2%** (59.0% LFR, 45% parse, NED 0.086, PPL 8.3) — **+13.5pp over default lr (+7.7%)**. lr=1e-5 transfers from 3B; now featured. → `evaluation_boolq_200s_grpo_v2g16_lr1e5_fair/` |
+| 3013832 / 3013833 | 7B BoolQ **GRPO multi lr=1e-5** (train + chained eval) | ✅ COMPLETE. **+18.8%** (56.6% LFR, 52% parse, NED 0.090, PPL 8.1) — **+9pp over default lr (+9.8%)**. → `evaluation_boolq_200s_grpo_mv2g16_lr1e5_fair/` |
 
 ## Completed Evaluations
 
@@ -425,6 +606,40 @@ All prior experiments have completed. Key recent completions:
 
 | Job ID | Name | Result |
 |--------|------|--------|
+| 2957871 | Llama SNLI-H DPO lr=5e-5 eval | COMPLETED but INVALID. 18/2000 parse rate (0.9%) — lr=5e-5 too high, adapter collapsed. lr=2e-5 +9.1% remains best DPO for Llama SNLI-H. |
+| 2957872 | 3B SNLI-H SimPO β=3 fair2 reconfirm | COMPLETED. **+7.2%** (NED 0.364, cfs=736) — slightly higher than original +6.8%. Update chart to +7.2%. |
+| 2957873 | Llama BoolQ GRPO v2 ckpt200 | COMPLETED. **−0.0%** (PPL=266k — extremely high, model not yet trained). |
+| 2957874 | Llama BoolQ GRPO v2 ckpt600 | COMPLETED. **−2.5%** (PPL=5680). |
+| 2957875 | Llama BoolQ GRPO v2 ckpt1200 | COMPLETED. **+3.5%** (NED 0.287, PPL=669) — first positive; mcl768 single. Peak at ckpt1800 +6.7%. |
+| 2960497 | Llama BoolQ GRPO v2 ckpt1500 | COMPLETED. **+6.5%** (mcl768 single; new v2 model). |
+| 2960498 | Llama BoolQ GRPO v2 ckpt1800 | COMPLETED. **+6.7% — PEAK** (mcl768 single; new v2 model). |
+| 2960499 | Llama BoolQ GRPO v2 ckpt2100 | COMPLETED. **+5.2%** (mcl768 single; new v2 model). |
+| 2960500 | Llama BoolQ GRPO v2 ckpt2500 | COMPLETED. **+4.4%** (mcl768 single; new v2 model). |
+| 2960501 | Llama BoolQ GRPO v2 ckpt3000 | COMPLETED. **+3.8%** (mcl768 single; new v2 model). |
+| 2960502 | Llama BoolQ GRPO v2 ckpt3500 | COMPLETED. **+2.6%** (mcl768 single; new v2 model). |
+| 2929454 | Llama SNLI-P GRPO-fair ckpt4500 | `evaluation_snli_premise_200s_grpo_mv2g16_fair_multi_ckpt4500_llama31_8b/` — **+28.0%** ΔLFR (70.5% LFR, NED 0.343, PPL 120.8) |
+| 2929455 | Llama SNLI-P GRPO-fair ckpt7000 | `evaluation_snli_premise_200s_grpo_mv2g16_fair_multi_ckpt7000_llama31_8b/` — **+29.0%** ΔLFR (71.5% LFR, NED 0.348, PPL 1706.9) |
+| 2929456 | Llama SNLI-H DPO lr=2e-5 fair rerun (corrupt) | resumed old progress file → 0 tuned CFs. Note: original `dpo_2pair_lr2e5_llama31_8b` (+9.1%) was already fair (same anchor). Resubmitted confirmation as **2932695**. |
+| 2929501 | Llama SNLI-H DPO lr=5e-5 (train) | `dpo_model_snli_hypothesis_2pair_lr5e5_llama31_8b/` — training complete; eval submitted **2929507** |
+| 2929507 | Llama SNLI-H DPO lr=5e-5 eval | eval-llama8b-fair — RUNNING (job 2929507) |
+| 2929543–2929557 | Llama SNLI-H: 15 confirmation re-evals | All COMPLETED. All originals already fair. Best confirmed results: SimPO β2 **+11.6%** (re-eval), GRPO mv2 **+9.6%**, GDPO **+6.2%**. DPO lr=2e-5 original **+9.1%** best. SFT 2ep original **+2.8%** (re-eval _fair dir corrupt −6.5%). |
+| 2929558 | Llama SNLI-P GRPO single ckpt7500 fair | `evaluation_snli_premise_200s_grpo_v2g16_ckpt7500_fair_llama31_8b/` — **+31.3%** (original was also fair; +32.5% was not bias — just stochasticity) |
+| 2929559 | 3B SNLI-P GRPO multi lr=1e-5 canonical | `evaluation_snli_premise_200s_grpo_mv2g16_lr1e5_fair_canonical_qwen25_3b/` — **+25.2%** |
+| 2929560 | 3B SNLI-P SimPO b3g05 canonical | `evaluation_snli_premise_200s_simpo_b3g05_fair_canonical_qwen25_3b/` — **+24.4%** |
+| 2929561 | 3B SNLI-P DPO 2pair 2ep lr=1e-5 fair | `evaluation_snli_premise_200s_dpo_2pair_2ep_lr1e5_fair_qwen25_3b/` — **+10.6%** |
+| 2929565–2929567 | 3B GRPO lr=1e-5 evals (FAILED) | Model at checkpoint subdir, not root. Resubmitted as **2932696–2932698** with checkpoint paths. |
+| 2929607 | Llama SNLI-H SimPO β2 fair | `evaluation_snli_hypothesis_200s_simpo_b2g05_fair_llama31_8b/` — **+11.6%** (best Llama SNLI-H method so far) |
+| 2929608 | Llama SNLI-H SimPO β3 fair | `evaluation_snli_hypothesis_200s_simpo_b3g05_fair_llama31_8b/` — **−38.7%** (confirms training divergence) |
+| 2929619–2929620 | 3B SNLI-P GDPO + GRPO canonical | GDPO v6 1ep **+17.1%**; GRPO mv2 ckpt4000 **+1.9%** |
+| 2929624–2929627 | 3B SNLI-H fair re-evals | GRPO mv2 1ep (fair) **+7.1%**; GRPO single (fair) **+2.3%**; DPO 2pair 2ep **+2.1%** |
+| 2932694 | Llama SNLI-H DPO lr=5e-5 eval | PENDING. `evaluation_snli_hypothesis_200s_dpo_2pair_lr5e5_fair_llama31_8b/` |
+| 2932695 | Llama SNLI-H DPO lr=2e-5 confirmation rerun | PENDING. Original +9.1% already fair; this is an additional confirmation run. |
+| 2932696 | 3B BoolQ GRPO multi lr=1e-5 eval | COMPLETED. **+7.6%** — beats previous best +6.0%. |
+| 2932697 | 3B SNLI-H GRPO multi lr=1e-5 eval | COMPLETED. **+7.3%** (slight improvement over +7.1%). |
+| 2932698 | 3B SNLI-P GRPO single lr=1e-5 eval | COMPLETED. **+27.7%** — massive improvement over default lr +16.9%. |
+| 2932699 | Llama SNLI-P GRPO-fair multi ckpt11200 | COMPLETED. **+29.2%** — marginally better than ckpt7000 +29.0%. |
+| 2933393 | Llama SNLI-H DPO lr=5e-5 eval (FAILED) | Script error: OUTPUT_DIR not set. Deleted output dir. Resubmitted as **2957871**. |
+| 2932901 | 3B SNLI-H SimPO β=3 reconfirm (FAILED) | Script error: OUTPUT_DIR not set. Resubmitted as **2957872**. |
 | 2773359 | 14B GRPO mv2 g16 SNLI-P v2fix (train+resume) | `grpo_model_snli_premise_1ep_g16_multi_qwen25_14b_v2fix/` — 1 epoch; eval **2777871** → `evaluation_snli_premise_200s_grpo_mv2_g16_qwen25_14b_v2fix/` |
 | 2771568 | eval-grpo-snli-h-v2fix | `evaluation_snli_hypothesis_200s_grpo_mv2_g16_v2fix/` — see SNLI-H table (GRPO mv2 g16 v2fix) |
 | 2771570 | eval-gdpo-snli-p-v2fix | `evaluation_snli_premise_200s_gdpo_v6_g16_v2fix/` — see SNLI-P table (GDPO v6 v2fix) |
@@ -501,6 +716,40 @@ All prior experiments have completed. Key recent completions:
 | 2819410 | 3b-gdpo-boolq-5ep   | Submitted. Fresh GDPO BoolQ 3B training, 5 epochs (`gdpo_model_boolq_5ep_g16_qwen25_3b_v6`) |
 | 2819412–14 | 3b-grpo-single | Training. GRPO v2 g16 (single reward) for 3B BoolQ/SNLI-P/SNLI-H |
 | 2819415–17 | 14b-grpo-single | Training. GRPO v2 g16 (single reward) for 14B BoolQ/SNLI-P/SNLI-H on H200 |
+| 2929500 | Llama BoolQ GRPO v2 single (train) | CANCELLED at 49% (ckpt3952/8000 — time limit). Produced `grpo_model_boolq_1ep_g16_llama31_8b_v2` with checkpoints up to ckpt3900. Checkpoint evals: **2957873–2957875** |
+| 2929501 | Llama SNLI-H DPO lr=5e-5 (train) | COMPLETED. `dpo_model_snli_hypothesis_2pair_lr5e5_llama31_8b/`. Eval: **2957871** |
+| 2957871 | Llama SNLI-H DPO lr=5e-5 eval | COMPLETED but INVALID. 18/2000 parse rate (0.9%) — lr=5e-5 too high, adapter collapsed. lr=2e-5 +9.1% remains best DPO for Llama SNLI-H. |
+| 2957872 | 3B SNLI-H SimPO β=3 fair2 reconfirm | COMPLETED. **+7.2%** (NED 0.364, cfs=736) — slightly higher than original +6.8%. Update chart to +7.2%. |
+| 2957873 | Llama BoolQ GRPO v2 ckpt200 | COMPLETED. **−0.0%** (PPL=266k — extremely high, model not yet trained). |
+| 2957874 | Llama BoolQ GRPO v2 ckpt600 | COMPLETED. **−2.5%** (PPL=5680). |
+| 2957875 | Llama BoolQ GRPO v2 ckpt1200 | COMPLETED. **+3.5%** (NED 0.287, PPL=669) — first positive; mcl768 single. Peak at ckpt1800 +6.7%. |
+| 2960497 | Llama BoolQ GRPO v2 ckpt1500 | COMPLETED. **+6.5%** (mcl768 single; new v2 model). |
+| 2960498 | Llama BoolQ GRPO v2 ckpt1800 | COMPLETED. **+6.7% — PEAK** (mcl768 single; new v2 model). |
+| 2960499 | Llama BoolQ GRPO v2 ckpt2100 | COMPLETED. **+5.2%** (mcl768 single; new v2 model). |
+| 2960500 | Llama BoolQ GRPO v2 ckpt2500 | COMPLETED. **+4.4%** (mcl768 single; new v2 model). |
+| 2960501 | Llama BoolQ GRPO v2 ckpt3000 | COMPLETED. **+3.8%** (mcl768 single; new v2 model). |
+| 2960502 | Llama BoolQ GRPO v2 ckpt3500 | COMPLETED. **+2.6%** (mcl768 single; new v2 model). |
+| 2929454 | Llama SNLI-P GRPO-fair ckpt4500 eval | RUNNING. GRPO-fair multi (KL-regularized, no collapse). |
+| 2929455 | Llama SNLI-P GRPO-fair ckpt7000 eval | RUNNING. |
+| 2929456 | Llama SNLI-H DPO lr=2e-5 fair reeval | RUNNING. Canonical fair eval of breakthrough DPO result. |
+| 2929543–2929557 | **Llama SNLI-H: 15 fair re-evals** | All originals were already fair (same anchor). base_LFR variance (57.6–59.4%) was stochasticity, not bias. Re-evals provide confirmation runs; best result per method is used. |
+| 2929558 | Llama SNLI-P GRPO single ckpt7500 fair | PENDING. Corrects −0.7pp anchor bias for best SNLI-P single result. |
+| 2929559 | 3B SNLI-P GRPO multi lr=1e-5 fair canonical | Original was already fair (same anchor); base_LFR variance was stochasticity. Canonical rerun gives +25.2%; original fair gave +25.3%. |
+| 2929560 | 3B SNLI-P SimPO b3g05 fair canonical | Original was already fair. Canonical gives +24.4%; best fair run (fair2) gives +25.5%. |
+| 2929561 | 3B SNLI-P DPO 2pair 2ep lr=1e-5 fair | Original was already fair. Canonical gives +10.6%; original fair gave +11.5%. |
+| 2929565 | **3B BoolQ GRPO multi lr=1e-5** (eval) | PENDING. First multi-reward lr=1e-5 eval for 3B BoolQ — underexplored. Model `grpo_model_boolq_1ep_g16_multi__lr1e5_qwen25_3b_mv2` trained (ckpt4200). |
+| 2929566 | **3B SNLI-H GRPO multi lr=1e-5** (eval) | PENDING. First multi-reward lr=1e-5 eval for 3B SNLI-H — underexplored. Model `grpo_model_snli_hypothesis_1ep_g16_multi__lr1e5_qwen25_3b_mv2` trained (ckpt8100). |
+| 2929567 | **3B SNLI-P GRPO single lr=1e-5** (eval) | PENDING. First single-reward lr=1e-5 eval for 3B SNLI-P — only 1 prior single config at default lr. Model `grpo_model_snli_premise_1ep_g16_v2_lr1e5_qwen25_3b` trained (ckpt13200). |
+| 2929506 | Llama BoolQ GRPO v2 single eval (CANCELLED) | DependencyNeverSatisfied — 2929500 was cancelled. Replaced by **2957873–2957875**. |
+| 2921262 | Llama SNLI-P GRPO-fair full eval | CANCELLED (DependencyNeverSatisfied). Full-epoch eval completed via 2932699 instead. |
+| **2929594–2929601** | **Llama BoolQ: 8 re-evals** | All originals already fair (same anchor). base_LFR variation was stochasticity. Re-evals provide additional runs; best result per method used. |
+| **2929602–2929606** | **Llama SNLI-P: 5 re-evals** | Same — all originals fair. GRPO single ckpt7500 original (+32.5%) better than re-eval (+31.3%). |
+| **2929607–2929608** | **Llama SNLI-H: SimPO re-evals** | SimPO b2 re-eval (+11.6%) better than original (+7.2%); SimPO b3 collapse confirmed (−38.7%). |
+| **2929609–2929612** | **14B: 4 re-evals** | All originals already fair. Re-evals may yield marginally different values. |
+| **2929615–2929618** | **3B BoolQ: 4 re-evals** | All originals already fair. Re-evals for additional confirmation. |
+| **2929619–2929623** | **3B SNLI-P: 5 re-evals** | All originals fair. Some re-eval runs lower due to stochasticity; best result per method retained. |
+| **2929624–2929629** | **3B SNLI-H: 6 re-evals** | All originals fair. Best result per method used. |
+| **2929639–2929648** | **7B: 10 fair re-evals** | PENDING. Created `run_eval_7b_fair.sh`. BoolQ: DPO 1pair/2pair, GRPO mv2 mcl1024 ckpt2000, GRPO mv2 g24 lr=1e-6, GRPO v2, SFT. SNLI-P: DPO 2pair, GDPO, SFT. SNLI-H: DPO 2pair. |
 
 
 ---
@@ -515,49 +764,4 @@ All prior experiments have completed. Key recent completions:
 | SNLI-Hypothesis | 1,735          | 3,244          | 1,735 / 2,000 (86.8%) |
 
 
-## Training Configuration
-
-By default, reported runs use QLoRA (4-bit quantization), LoRA r=32, alpha=16, lr=5e-6 on **Qwen/Qwen2.5-7B-Instruct**. **Qwen2.5-14B-Instruct** experiments are expected to use the same recipe unless memory limits require smaller effective batch or adjusted `max_completion_length` / generations (especially for GRPO/GDPO).
-
-- **b4**: batch size 1, gradient accumulation 4 (effective batch 4)
-- **b16**: batch size 4, gradient accumulation 4 (effective batch 16, requires A100-80GB)
-- **200step**: `max_steps=200` (effective epochs vary: 1pair b4 ~0.4-0.5ep, 1pair b16 ~1.6-1.9ep, 2pair b4 ~0.2-0.3ep, 2pair b16 ~0.8-1.0ep)
-- **DPO pairs**: chosen = label-flipping CFs, rejected = non-flipping CFs; 2pair = best+worst and 2nd-best+2nd-worst; 1pair = best+worst only
-- **SFT**: trains on chosen examples only (no rejected/contrast data)
-- **GRPO g4/g16**: online RL, 4 or 16 generations per prompt, temperature=1.2, combined or decomposed reward. g4 trained for 2ep; g16 trains for 1ep (see [GRPO_ANALYSIS.md](GRPO_ANALYSIS.md) for epoch analysis)
-- **GRPO † (old reward)**: single reward = `flip + 0.8 * similarity` (no confidence weighting)
-- **GRPO v2 (corrected reward)**: single reward = `flip + confidence * similarity` (matches DPO unified score)
-- **GRPO mv2 (multi-reward v2)**: 4 decomposed rewards: FlipReward + SimilarityReward + GatedConfidenceReward + FormatReward
-- **GRPO lr1e6**: same reward as parent config but trained at lr=1e-6 (vs default 5e-6) to prevent BoolQ instability
-- **GDPO**: GRPO with per-reward normalization (normalize each reward independently per group, then sum). Uses mv2 reward functions. See `gdpo_trainer.py`
-- **g24**: experiments with 24 generations per prompt (vs 16) for better group diversity and reward signal. SNLI g24 requires ~24000 optimizer steps (2x BoolQ due to 2 prompts/entry), exceeding the 24h SLURM limit; resumed from checkpoints
-- **GDPO lr1e6**: GDPO with lr=1e-6 (vs default 5e-6) and FormatReward weight 3x to prevent entropy collapse
-- **GDPO v2 (conditioned)**: GDPO with conditioned rewards (similarity gated on flip), beta=0.001 KL penalty, lr=1e-6. ~~Dynamic sampling (zero-variance group filtering)~~ removed in v2fix (April 7) -- biased batch normalization. See [GDPO_BOOLQ_IMPROVEMENTS.md](GDPO_BOOLQ_IMPROVEMENTS.md)
-- **GDPO v3 (NED penalty)**: GDPO v2 + ned_penalty_alpha=0.2 (penalizes NED for non-flipping completions), lr=5e-6 for SNLI / lr=1e-6 for BoolQ. SNLI training was unstable (KL spike/entropy collapse)
-- **GDPO v4 (intermediate LR)**: GDPO v2 with lr=3e-6, beta=0.005 (5x stronger KL penalty), no NED penalty. Timed out at epoch ~0.97 with recurring KL spikes
-- **GDPO v5 (paper-aligned)**: Critical fix: `generation_batch_size=128` (8 groups) instead of 16 (1 group). All prior GDPO experiments had batch normalization operating on only 1 group, making GDPO mathematically identical to GRPO. v5 also uses paper hyperparameters: lr=1e-6, beta=0.0005, epsilon_high=0.28 (DAPO asymmetric clipping). BS=8 on single A100-80GB
-- **GRPO mcl768**: GRPO mv2 g16 with max_completion_length=768 for BoolQ (vs default 512)
-- **SFT lr1e5/lr2e5**: SFT LR sweep with lr=1e-5 or 2e-5 (vs default 5e-6). All previous SFT runs used lr=5e-6; standard SFT with LoRA typically uses 1e-5 to 2e-5
-- **GDPO v6**: GDPO v5 config (8 groups, conditioned rewards) with lr=5e-6 (matching GRPO). Tests whether higher LR helps with proper batch normalization
-- **GDPO paper-match**: Maximum paper alignment. 4 GPUs (32 groups), TRL built-in `normalize_then_sum`, lr=5e-6, beta=0.0, standard (non-conditioned) rewards. Uses standard GRPOTrainer (not custom GDPOTrainer)
-- **GRPO paper-match**: Control for GDPO paper-match. Same 4-GPU setup with `sum_then_normalize` (standard GRPO aggregation). Isolates the effect of per-reward normalization from larger batch size
-- **GRPO mv2 sft-ws**: SFT warm-start GRPO: base model first fine-tuned via SFT on BoolQ CFs, LoRA merged, then used as initialization for GRPO mv2 g16 training. Result: no improvement over cold-start GRPO
-- **SFT LR sweep results**: lr=1e-5 uniformly negative across datasets; lr=2e-5 causes heavy memorization (token accuracy 0.96, NaN PPL on BoolQ). Confirms lr=5e-6 is optimal for SFT with LoRA
-- **GDPO v7 (4GPU + v6 innovations)**: 4 GPUs (32 groups), conditioned rewards, beta=0.0005, epsilon_high=0.28, lr=5e-6. Uses custom GDPOTrainer via torchrun. Result: +15.7% on SNLI-P — same as v6 (8 groups), confirming more groups don't improve ΔLFR
-- **GDPO v6 checkpoint sweep (SNLI-P)**: Evaluations at ckpt-2000 (~0.25ep), ckpt-4000 (~0.50ep), ckpt-6000 (~0.75ep). Peak at ckpt-2000 (+18.2%), confirming GDPO peaks earlier than GRPO (0.25ep vs 0.50ep). Pattern: +18.2% → +18.1% → +16.5% → +15.7% (full epoch)
-- **GDPO v6 checkpoint sweep (SNLI-H)**: Peak at ckpt-6000 (~0.75ep): **+18.7% ΔLFR**, surpassing GRPO mv2 g16 (+15.1%). Trajectory: +15.9% (0.25ep) → +17.6% (0.50ep) → +18.7% (0.75ep) → +17.6% (1.0ep). Peak later than SNLI-P
-- **DPO BoolQ ml2048**: 2pair b4 2ep with max_length=2048: +8.5% ΔLFR. Below 1pair b4 (+10.5%), confirming 2pair is worse for BoolQ DPO
-- **GDPO v6 BoolQ mcl1024**: max_completion_length=1024: +0.3% ΔLFR. Longer completions did not help GDPO on BoolQ
-- **GRPO mv2 BoolQ mcl1024**: TIMEOUT after 24h (mcl1024 makes generation ~4x slower). Reached checkpoint-4400; eval pending
-- **SFT BoolQ ml2048**: max_seq_length=2048 (vs default 1024). Modest improvement +1.8% (vs -0.0% at ml1024), suggesting training truncation was a minor factor for SFT on BoolQ
-- **DPO BoolQ ml2048**: max_length=2048 (vs default 1024). Tests whether DPO also benefits from longer training sequences on BoolQ. Pending (fixed TRL API: removed deprecated max_prompt_length from DPOConfig)
-- **KTO**: `train_dpo.py --loss_type kto` uses TRL's `KTOTrainer` with the Kahneman-Tversky utility loss (gains/losses weighted asymmetrically — losses loom larger than gains). Data is converted from the standard DPO pair format `(prompt, chosen, rejected)` into the binary `(prompt, completion, label: True/False)` format expected by `KTOTrainer` via `expand_to_kto_format`. Each DPO pair becomes 2 independent rows (1 desirable + 1 undesirable). This tests whether the KT asymmetric loss outperforms the symmetric DPO log-ratio loss on the same paired data; it does **not** test KTO's other advertised advantage (unpaired binary feedback, i.e., no `construct_dpo_pairs.py` pairing required).
-- **DPO IPO**: `--loss_type ipo`. Identity Preference Optimization — uses squared error instead of sigmoid, bounded optimization that prevents overfitting. Beta maps to regularization parameter tau. All default hyperparameters (lr=5e-6, beta=0.1). Result: catastrophic on BoolQ (-11.7%), decent on SNLI-P (+14.9%), moderate on SNLI-H (+11.7%). Possible LR mismatch — IPO loss scale (~25) is fundamentally different from sigmoid DPO (~0.7)
-- **DPO Robust**: `--loss_type robust --label_smoothing 0.01`. Noise-tolerant DPO that models annotation noise probability. All default hyperparameters. Result: worse than standard DPO everywhere (BoolQ +3.8%, SNLI-P +13.7%, SNLI-H +7.4%). Our synthetic data is clean, so noise tolerance isn't needed
-- **DPO DiscoPOP**: `--loss_type discopop`. LLM-discovered loss function. All default hyperparameters. Result: near-zero learning (BoolQ +0.2%, SNLI-P -1.1%, SNLI-H +0.9%). Essentially failed to learn on our task
-- **SimPO** (`train_dpo.py --loss_type simpo`, CPOTrainer): reference-free preference; `beta=2.0`, `simpo_gamma=1.4`, `cpo_alpha=0`, same b4 2ep / pair choice as best DPO per dataset. **BoolQ +9.8%** (second-best offline, 0.7pp below sigmoid DPO +10.5%; NED 0.111, PPL 14.0). **SNLI-P +27.1%** (within 0.4pp of GRPO mv2). **SNLI-H +26.4%** with high NED (0.477); **SNLI-H β×γ grid**: best **β=3, γ=0.5** (+29.7% ΔLFR, NED 0.428, lowest PPL in grid ~1202 vs very high PPL for other cells — SimPO is sensitive to β). See SNLI-H table for all six cells. **Fair-base SimPO b3γ0.5** (reuse GRPO mv2 g16 base CFs): BoolQ **+21.8%**, SNLI-P **+23.5%** (tables above). **SimPO b3γ0.5 + CPO α=0.1** (SNLI-H): +25.2% ΔLFR; aggregate PPL can be inflated by a few bad CFs — inspect `eval_full.json` / generations when the headline PPL looks pathological.
-- **Perplexity in evaluation** (`evaluate_models.py`): A few degenerate edits (e.g. single character `"+"`) produced **NaN loss** under the quantized fine-tuned model; averaging those into mean PPL made the **entire** average NaN. **Fix**: skip non-finite loss in `compute_perplexity`, require ≥2 characters and ≥2 tokens, aggregate only **finite** per-CF PPLs; report `—` if none valid. Re-run eval to refresh markdown with the new aggregation
-- **GDPO v6 SNLI-H ablation** (same v6 setup except one trick removed; full 1.0ep): removing **conditioned rewards** collapses ΔLFR to **-4.6%** (baseline +18.7%). Removing asymmetric clipping → +13.0%. Removing KL → raw ΔLFR +37.1% but PPL 1360 and NED 0.442 — KL mainly constrains disfluent / oversized edits, not “holding back” good performance at the baseline setting
-- **DPO BoolQ β=0.05**: `beta=0.05` vs default 0.1, else same as 1pair b4 2ep. Result: **+5.8%** ΔLFR vs **+10.5%** at β=0.1; PPL **29.2** vs 23.9 — weaker KL hurts BoolQ DPO
-- **DPO BoolQ IPO lr=1e-6**: same as IPO variant but `learning_rate=1e-6`. Result: **+0.3%** ΔLFR (vs **−11.7%** at lr=5e-6) — LR was the main issue for IPO on BoolQ, but tuned IPO still loses to sigmoid DPO
 

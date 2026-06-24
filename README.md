@@ -7,7 +7,7 @@ This thesis compares post-training self-alignment methods — SFT, DPO, SimPO, G
 
 ## Research Goal
 
-This project investigates how different post-training methods affect a language model's ability to generate **minimal, label-flipping counterfactuals** for text classification tasks. All methods fine-tune **Qwen/Qwen2.5-7B-Instruct** (primary) with QLoRA (4-bit, LoRA r=32, alpha=16, lr=5e-6) on three datasets: **BoolQ** (edit passage to flip yes/no answer), **SNLI-Premise** and **SNLI-Hypothesis** (edit premise/hypothesis to change NLI relationship). Scale-ups to **Qwen2.5-14B-Instruct** and **Qwen2.5-3B-Instruct** use the same recipe.
+This project investigates how different post-training methods affect a language model's ability to generate **minimal, label-flipping counterfactuals** for text classification tasks. All methods fine-tune **Qwen/Qwen2.5-7B-Instruct** (primary) with QLoRA (4-bit, LoRA r=32, alpha=16, lr=5e-6) on three datasets: **BoolQ** (edit passage to flip yes/no answer), **SNLI-Premise** and **SNLI-Hypothesis** (edit premise/hypothesis to change NLI relationship). Scale-ups to **Qwen2.5-14B-Instruct**, **Qwen2.5-3B-Instruct**, and **Llama-3.1-8B-Instruct** (cross-architecture) use the same recipe.
 
 
 | Method    | Type      | Description                                                                         |
@@ -23,35 +23,41 @@ This project investigates how different post-training methods affect a language 
 
 ## Results
 
-Best ΔLFR (label flip rate improvement over base model) per method, using fair-base N=200 evaluation on **Qwen2.5-7B-Instruct**:
+Best ΔLFR (label flip rate improvement over base model) per method, using fair-base N=200 evaluation on **Qwen2.5-7B-Instruct**. Each cell is the best run with **parse rate ≥ 15% of base** (parse-collapse artifacts excluded). NED is reported as the median over non-trivial edits (NED>0) and PPL as the median:
 
 
-| Method              | BoolQ      | SNLI-Premise | SNLI-Hypothesis |
-| ------------------- | ---------- | ------------ | --------------- |
-| **DPO**             | **+10.5%** | +17.3%       | **+21.0%**      |
-| SimPO               | +9.8%      | **+27.1%**   | +26.4%          |
-| SFT                 | +1.8%      | -1.7%        | +1.7%           |
-| GRPO (mv2 g16)      | +1.7%      | +27.5%       | +15.1%          |
-| GDPO v6 (best ckpt) | +1.1%      | +18.2%       | +18.7%          |
+| Method              | BoolQ       | SNLI-Premise | SNLI-Hypothesis |
+| ------------------- | ----------- | ------------ | --------------- |
+| **DPO**             | +22.1%      | +24.5%       | +23.2%          |
+| SimPO               | **+28.6%**  | **+30.5%**   | **+29.4%**      |
+| SFT                 | +9.6%       | +1.8%        | +1.7%           |
+| GRPO (best variant) | +21.2%      | +29.1%       | +22.6%          |
+| GDPO v6 (best ckpt) | +1.1%       | +18.2%       | +18.7%          |
+
+On the canonical fair base, **SimPO leads 7B BoolQ** (+28.6%, 68% parse), ahead of DPO (+22.1%). GRPO with **lr=1e-5** jumps to +21.2% (single) / +18.8% (multi), up from +7.7% / +9.8% at the default lr — the same lr lift seen at 3B.
 
 Scale-up highlights (fair-base N=200, see `RESULTS.md`):
 
-| Model | Best SNLI-P | Best SNLI-H | Best BoolQ |
-| ----- | ----------- | ----------- | ---------- |
-| 7B    | GRPO +27.5% | SimPO +26.4% | DPO +10.5% |
-| 14B   | GDPO +26.2% | SimPO +13.7% | SimPO +7.0% |
-| 3B    | SimPO +25.5% | GDPO +13.6% | DPO +0.0% |
+| Model    | Best SNLI-P          | Best SNLI-H          | Best BoolQ           |
+| -------- | -------------------- | -------------------- | -------------------- |
+| 7B       | SimPO +30.5%         | SimPO +29.4%         | SimPO +28.6%         |
+| 14B      | GRPO multi +29.8%    | GRPO multi +14.9%    | SimPO +7.0%          |
+| 3B       | GRPO single +27.7%   | GDPO +15.2%          | GRPO single +10.4%   |
+| Llama 8B | GRPO single +32.5%   | GRPO multi +9.6%     | GDPO +17.3%          |
 
 
 **Key findings:**
 
-- **GRPO mv2 g16 is the best 7B method on SNLI-P**: +27.5%; SimPO matches closely (+27.1%) with much simpler offline training
-- **SimPO dominates at 14B scale**: +26.2% SNLI-P (but GDPO v6 achieves the same via richer training), +13.7% SNLI-H
-- **GDPO v6 with early stopping surpasses GRPO on 7B SNLI-H**: +18.7% vs +15.1%
-- **DPO leads on 7B BoolQ** (+10.5%); 3B cannot learn BoolQ CFs at all from DPO pairs (+0.0%)
-- **Conditioned rewards + KL penalty > more groups**: GDPO v6 (8 groups) +15.7% > paper-match (32 groups) +7.6%
-- **Early stopping is dataset-dependent**: GDPO peaks at ~0.25ep on SNLI-P, ~0.75ep on SNLI-H
-- **PPL matters**: SimPO SNLI-H achieves very high ΔLFR but at the cost of fluency (PPL >1000 in grid-best configs)
+- **SimPO leads both 7B SNLI tasks** (+30.5% Premise, +29.4% Hypothesis) with simple offline training, edging out GRPO multi (+29.1% / +22.6%)
+- **SimPO leads 7B BoolQ on the canonical fair base** (+28.6%, 68% parse), ahead of DPO (+22.1%) — so SimPO is the strongest offline method on all three 7B tasks
+- **GRPO multi is the strongest online method at 14B** (SNLI-P +29.4%, SNLI-H +14.9%) and competitive at 7B SNLI-P (+29.1%)
+- **Llama-8B GRPO single yields the highest single ΔLFR anywhere** (+32.5% SNLI-P); GDPO leads Llama BoolQ (+17.3%)
+- **Llama SNLI-H is the one cell where online RL decisively beats offline**: after exhaustive sweeps (configs + full checkpoint sweeps), every offline method plateaus at base (DPO −0.8%, SimPO +0.7%, SFT +0.6% — best healthy-parse run each); only GRPO multi (+9.6%) and GDPO (+6.9%) clear it. Attributable to weak self-generated preference contrast at this cell's high base LFR (56.4%)
+- **GRPO lr=1e-5 is the key hyperparameter on BoolQ at every scale**: lifts 7B BoolQ GRPO single +7.7%→+21.2% and multi +9.8%→+18.8%, mirroring the same lift at 3B — default lr=1e-6 badly under-trains GRPO on BoolQ
+- **GRPO reward design is scale-dependent**: multi ≥ single at 7B/14B SNLI, but single wins at 3B and on Llama SNLI-P — the optimal reward structure is not universal
+- **3B cannot learn BoolQ CFs from offline pairs**: DPO 1pair ≈ +0% and the stronger 2pair recipe is −0.6%; only online RL (GRPO single +10.4%) works there
+- **Parse rate matters as much as LFR**: high-ΔLFR runs frequently come from parse collapse (the model emits few well-formed edits, and those few flip easily). Charts/tables therefore gate on parse ≥ 15% of base
+- **Metric hygiene**: PPL/NED are reported as medians — the mean PPL is inflated 3–70× by sparse outlier parses (e.g. 7B SNLI-H GRPO g24 mean PPL 9651 vs median 137); NED excludes trivial NED=0 "non-edits"
 
 See `RESULTS.md` for complete results and `OVERVIEW.md` for detailed analysis.
 
@@ -178,9 +184,13 @@ MODEL=Qwen/Qwen2.5-14B-Instruct TAG=qwen25_14b ./submit_model_pipeline.sh
 # 3B: equivalent pipeline
 ./submit_3b_pipeline.sh
 
-# Post-hoc fair eval for any adapter (14B or 3B)
+# Llama 3.1 8B: cross-architecture pipeline
+./submit_llama8b_pipeline.sh
+
+# Post-hoc fair eval for any adapter
 ADAPTER_DIR=results/my_model DATASET=boolq ./run_eval_14b_fair.sh
 ADAPTER_DIR=results/my_model DATASET=boolq ./run_eval_3b_fair.sh
+ADAPTER_DIR=results/my_model DATASET=boolq ./run_eval_llama8b_fair.sh
 ```
 
 ### Stage 5: Evaluate
@@ -252,6 +262,8 @@ cfg-dpo/
 ├── run_sft_train_only.sh          # SFT training Slurm job (no inline eval)
 ├── run_eval_14b_fair.sh           # Fair eval for any 14B adapter
 ├── run_eval_3b_fair.sh            # Fair eval for any 3B adapter
+├── submit_llama8b_pipeline.sh     # Orchestrate full pipeline (Llama 8B)
+├── run_eval_llama8b_fair.sh       # Fair eval for any Llama 8B adapter
 │
 ├── RESULTS.md                     # Full evaluation results
 ├── OVERVIEW.md                    # Detailed method analysis
@@ -282,10 +294,10 @@ All training scripts support `--use_wandb` with `--wandb_run_name`. Dashboard: [
 
 ## Future Work
 
-- **GRPO single vs multi reward at scale** — 14B and 3B GRPO single-reward runs underway; 7B results favour multi-reward but scale effect is unknown
-- **BoolQ** — All methods yield marginal gains at 7B (+1.1–10.5%) and fail entirely at 3B (+0.0%); DPO remains best at 7B/14B; online RL methods struggle with long passages
+- **Llama SNLI-H offline preference-pair rebuild** — the one remaining lever for the only below-base cell (DPO −0.8%): regenerate preference pairs with stricter chosen/rejected contrast filters and retrain DPO/SimPO, to test whether weak self-generated contrast (not the method) is the bottleneck
+- **Llama SNLI-H GRPO multi lr=1e-5** — checkpoint eval sweep running (jobs 3114894–3114897) to see if the lr=1e-5 variant beats the current GRPO multi best (+9.6%)
 - **Benchmark evaluation** — Check for capability degradation on MMLU, HellaSwag, ARC
-- **Optimal early stopping** — Checkpoint sweeps completed for GDPO 7B; to be extended to 14B/3B
+- **Parse-rate-aware reporting** — formalize the "best non-degraded run" selection (parse ≥ 15% of base) used in the charts; consider a combined LFR×parse quality score
 
 ## License
 
