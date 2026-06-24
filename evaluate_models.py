@@ -130,7 +130,7 @@ def load_base_model(model_name: str, cache_dir: str):
         trust_remote_code=True,
         token=Config.HF_TOKEN,
         cache_dir=cache_dir,
-        attn_implementation="eager",  # Avoid SDPA compatibility issues with older PyTorch
+        attn_implementation="sdpa",
     )
     
     return model, tokenizer

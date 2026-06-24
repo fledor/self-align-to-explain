@@ -224,7 +224,13 @@ def parse_args():
         default=0.0,
         help="Weight of BC regularizer for CPO-SimPO (0.0=pure SimPO, >0=CPO-SimPO hybrid).",
     )
-    
+    parser.add_argument(
+        "--max_grad_norm",
+        type=float,
+        default=None,
+        help="Maximum gradient norm for clipping. If not set, uses trainer default (CPOTrainer historically did not enforce this).",
+    )
+
     # Logging arguments
     parser.add_argument(
         "--logging_steps",
@@ -512,6 +518,9 @@ def main():
         if not HAS_CPO:
             raise ImportError("SimPO requires CPOTrainer. Install trl>=0.16.0 or check trl.experimental.cpo")
         print("\n⚙️ Configuring CPO trainer (SimPO mode)...")
+        cpo_kwargs = {}
+        if args.max_grad_norm is not None:
+            cpo_kwargs["max_grad_norm"] = args.max_grad_norm
         training_args = CPOConfig(
             output_dir=args.output_dir,
             num_train_epochs=args.num_train_epochs,
@@ -520,6 +529,7 @@ def main():
             gradient_accumulation_steps=args.gradient_accumulation_steps,
             learning_rate=args.learning_rate,
             max_length=args.max_length,
+            **cpo_kwargs,
             beta=args.beta,
             loss_type="simpo",
             cpo_alpha=args.cpo_alpha,
@@ -544,6 +554,9 @@ def main():
         )
     else:
         print("\n⚙️ Configuring DPO trainer...")
+        dpo_kwargs = {}
+        if args.max_grad_norm is not None:
+            dpo_kwargs["max_grad_norm"] = args.max_grad_norm
         training_args = DPOConfig(
             output_dir=args.output_dir,
             num_train_epochs=args.num_train_epochs,
@@ -552,6 +565,7 @@ def main():
             gradient_accumulation_steps=args.gradient_accumulation_steps,
             learning_rate=args.learning_rate,
             max_length=args.max_length,
+            **dpo_kwargs,
             beta=args.beta,
             loss_type=args.loss_type,
             label_smoothing=args.label_smoothing,

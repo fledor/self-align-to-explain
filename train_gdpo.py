@@ -211,7 +211,7 @@ def main():
     model_init_kwargs = {
         "trust_remote_code": True,
         "torch_dtype": torch.bfloat16 if args.bf16 else (torch.float16 if args.fp16 else torch.float32),
-        "attn_implementation": "eager",
+        "attn_implementation": "sdpa",
     }
     if args.use_4bit:
         model_init_kwargs["quantization_config"] = BitsAndBytesConfig(
