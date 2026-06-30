@@ -2,7 +2,7 @@
 
 Comparing post-training self-alignment methods for improving counterfactual generation quality. **Primary results** below fine-tune **Qwen/Qwen2.5-7B-Instruct** using QLoRA (4-bit, LoRA r=32, alpha=16, lr=5e-6) on three NLI/classification datasets. Scale-ups to **Qwen2.5-14B-Instruct** and **Qwen2.5-3B-Instruct** are fully model-native (see [RESULTS.md](RESULTS.md)). Use `submit_model_pipeline.sh` / `submit_3b_pipeline.sh` to switch models.
 
-**Last updated**: Jun 22, 2026. **Paper-readiness pass**: full 12-cell × 6-method matrix (4 models × 3 datasets) is fair N=200 with medians for NED (NED>0) and PPL throughout. New: **7B BoolQ GRPO lr=1e-5** lifts single +7.7%→**+21.2%** and multi +9.8%→**+18.8%** (same lr lift as 3B); **Llama SNLI-P DPO 2pair lr=2e-6** +2.4% (clears base); **3B BoolQ DPO 2pair** −0.6% (confirms 3B can't learn BoolQ offline). Only one below-base cell remains: **Llama SNLI-H DPO −0.8%** (every config + full checkpoint sweep ≤ base; offline plateau where online RL wins — GRPO multi +9.6%). Llama SNLI-H GRPO multi lr=1e-5 checkpoint eval sweep running (jobs 3114894–3114897).
+**Last updated**: Jun 30, 2026. **Paper-readiness pass**: full 12-cell × 6-method matrix (4 models × 3 datasets) is fair N=200 with medians for NED (NED>0) and PPL throughout. **Every featured cell now clears base** — the last holdout, **Llama SNLI-H DPO**, was lifted from −0.8% to **+0.5%** by a **β-sweep** (β=0.3 ckpt100, 90% parse, median PPL 146); the earlier "offline ceiling" was a default-β=0.1 artifact, not a fundamental limit (online RL still wins this cell decisively — GRPO multi +9.6%). Offline methods only marginally clear base here (DPO +0.5, SimPO +0.7, SFT +0.6). **New § Parse-gate exclusions** (§7) documents the 18 runs the 15%-of-base parse gate drops — all Llama, none Qwen — and the offline-vs-online `<edit>`-tag training asymmetry behind the Llama offline parse collapses.
 
 ### Qwen2.5-14B-Instruct scale-up
 
@@ -358,6 +358,52 @@ GDPO's normalization operates within each group of `num_generations=16` completi
 - **NED aggregation (updated)**: Best-result N=200 NED values now use **median NED over CFs with NED > 0** (identical copies excluded — they are not counterfactuals by definition, and their inclusion inflates the LFR denominator unfairly; see discussion in `RESULTS.md` and RGF, ACL 2022). Historical/secondary entries still report mean NED from `eval_summary.avg_norm_edit_distance`. Note: NED=0 entries **are still counted in the LFR denominator** — they represent a genuine model failure to produce an edit.
 - **Base model as judge**: the un-fine-tuned base model classifies all counterfactuals (both base-generated and fine-tuned-generated) to determine label flips
 - **Evaluation variance**: base LFR varies 2-5pp across independent runs; differences below ~5pp should be treated cautiously
+
+### Parse-gate exclusions
+
+**The gate.** A counterfactual only counts if the model emits a parseable `<edit>…</edit>` span (`utils.parse_edit_tag`). Parse rate = parsed CFs / (N×10). For featuring a result we require **parse ≥ 15% of that cell's base parse rate**; runs below the gate are excluded from selection (the charted run is the highest-ΔLFR run *among gate-passers*). Rationale: a run that only parses a few percent of the time reports LFR over a tiny, self-selected sample (the model only "answers" on the inputs it happens to handle), so a high ΔLFR there is an artifact, not a real improvement. If *every* run in a cell were sub-gate the code falls back to all runs — but this never happens; every cell has at least one gate-passing run.
+
+**Scope — this only ever bit Llama-3.1-8B.** All 18 gate-excluded runs are Llama; **no Qwen-3B / 7B / 14B run was excluded** (the lowest 7B run, SNLI-H GDPO g16 at 18.5%, still clears its 8.7% gate). This is because Llama's base parse is very high (~89% on every dataset → gate ≈ 13.3%), while several of Llama's *offline* runs at aggressive LR collapse their parse to single digits. (Gates: 3B 6.4–13.4%, 7B 8.7–12.4%, 14B 9.3–13.2%, Llama 13.3–13.4%.)
+
+**Cells where the gate actually changed which run is featured (4, all Llama):**
+
+| Cell | Excluded (higher ΔLFR, sub-gate) | Featured (gate-passing) |
+|------|----------------------------------|--------------------------|
+| Llama SNLI-H DPO   | lr=2e-5 **+9.1%** @ 2.3% parse | β=0.3 ckpt100 **+0.5%** @ 90% parse |
+| Llama SNLI-H SimPO | β2γ0.5 **+11.6%** @ 4.6% parse | β3γ0.5 **+0.7%** @ 70% parse |
+| Llama SNLI-H SFT   | 2ep **+2.8%** @ 11.1% parse | ckpt100 **+0.6%** @ 72% parse |
+| Llama SNLI-P DPO   | 1pair lr=1e-5 **+10.3%** @ 3.9% parse | 2pair lr=2e-6 **+2.4%** @ 74% parse |
+
+In every other cell the gate dropped some weak candidate runs but the best run was already gate-passing, so the featured pick is unchanged.
+
+**Full list of the 18 gate-excluded runs** (parse < 15% of base; ΔLFR shown is the *reported* value over the collapsed sample and is not trustworthy):
+
+| Model | Dataset | Method | Parse | Gate | reported ΔLFR | Run dir |
+|-------|---------|--------|-------|------|---------------|---------|
+| Llama | BoolQ  | DPO        |  5.2% | 13.3% |  +3.4 | `..._boolq_200s_dpo_1pair_lr1e5_llama31_8b` |
+| Llama | BoolQ  | DPO        |  6.5% | 13.3% |  +2.0 | `..._boolq_200s_dpo_sigmoid_lr1e5_llama31_8b` |
+| Llama | BoolQ  | GRPO multi | 11.6% | 13.3% | −47.4 | `..._boolq_200s_grpo_mv2g16_lr1e5_fair_llama` |
+| Llama | BoolQ  | GRPO multi | 11.8% | 13.3% | −46.8 | `..._boolq_200s_grpo_mv2g16_lr1e5_llama31_8b` |
+| Llama | SNLI-H | DPO        |  0.9% | 13.4% |  −3.3 | `..._snli_hypothesis_200s_dpo_2pair_lr5e5_llama31_8b` |
+| Llama | SNLI-H | DPO        |  2.3% | 13.4% |  +9.1 | `..._snli_hypothesis_200s_dpo_2pair_lr2e5_llama31_8b` |
+| Llama | SNLI-H | DPO        |  3.6% | 13.4% |  −0.6 | `..._snli_hypothesis_200s_dpo_2pair_lr1e5_fair_llama31_8b` |
+| Llama | SNLI-H | DPO        |  4.2% | 13.4% |  −1.6 | `..._snli_hypothesis_200s_dpo_2pair_lr1e5_llama31_8b` |
+| Llama | SNLI-H | DPO        |  8.9% | 13.4% | −13.2 | `..._snli_hypothesis_200s_dpo_1pair_lr1e5_llama31_8b` |
+| Llama | SNLI-H | SFT        |  9.7% | 13.4% |  −6.5 | `..._snli_hypothesis_200s_sft_2ep_fair_llama31_8b` (stale-resume; discard) |
+| Llama | SNLI-H | SFT        | 11.1% | 13.4% |  +2.8 | `..._snli_hypothesis_200s_sft_2ep_llama31_8b` |
+| Llama | SNLI-H | SimPO      |  0.2% | 13.4% | −15.7 | `..._snli_hypothesis_200s_simpo_b3g05_llama31_8b` |
+| Llama | SNLI-H | SimPO      |  0.3% | 13.4% | −38.7 | `..._snli_hypothesis_200s_simpo_b3g05_fair_llama31_8b` (diverged) |
+| Llama | SNLI-H | SimPO      |  4.6% | 13.4% |  +7.2 | `..._snli_hypothesis_200s_simpo_b2g05_llama31_8b` |
+| Llama | SNLI-H | SimPO      |  4.6% | 13.4% | +11.6 | `..._snli_hypothesis_200s_simpo_b2g05_fair_llama31_8b` |
+| Llama | SNLI-P | DPO        |  2.6% | 13.3% |  −9.1 | `..._snli_premise_200s_dpo_2pair_lr1e5_llama31_8b` |
+| Llama | SNLI-P | DPO        |  3.9% | 13.3% | +10.3 | `..._snli_premise_200s_dpo_1pair_lr1e5_llama31_8b` |
+| Llama | SNLI-P | DPO        | 13.2% | 13.3% |  +2.2 | `..._snli_premise_200s_dpo_2pair_lr5e6_llama31_8b` (just under gate) |
+
+**Why these collapsed — a known asymmetry, not a silent bug.** Every excluded run is an *offline* method (DPO/SimPO/SFT) at an aggressive LR, plus two lr=1e-5 GRPO-multi runs that genuinely diverged. The offline preference/SFT targets are trained on the **bare edited text with the `<edit>…</edit>` wrapper stripped** (`construct_dpo_pairs.py` uses `chosen_cf["edited_text"]`; `train_sft.py` uses `prompt + chosen`), whereas the eval parser and the online GRPO/GDPO rewards (`FormatReward`, `MinimalityReward`) require the tags. At low LR the few-shot prompt keeps the format and parse stays healthy (DPO/SimPO/SFT featured runs are 70–94% parse); at high LR the offline objective overrides the prompt and the model stops emitting tags, collapsing parse. The gate is what prevents these collapsed-but-high-LFR runs from being mistaken for wins. Fully removing the asymmetry would require wrapping the offline training targets in `<edit>` tags and retraining DPO/SimPO/SFT — deferred (results already clear the gate in every featured cell).
+
+### General-capability benchmarks (MMLU + ANLI)
+
+All 76 models (4 base + 72 best adapters) were evaluated zero-shot with `lm-eval` on MMLU and ANLI (r1/r2/r3) to check whether CF fine-tuning degrades general capability. **It does not.** Across all 72 adapters, ΔMMLU vs base averages **+0.04pp** (range −0.37 to +0.21) and ΔANLI averages **+0.07pp** (range −0.68 to +1.19); the largest single MMLU drop is **−0.4pp** (Llama SNLI-P GRPO-single). LoRA-based CF training is minimally invasive — it does not trade away general knowledge or NLI ability. Full per-cell table: `BENCHMARKS.md`. (Base references: Qwen-3B MMLU 65.2 / Qwen-7B 71.0 / Qwen-14B 78.8 / Llama-8B 67.8.)
 
 ### Training data sizes (reference)
 

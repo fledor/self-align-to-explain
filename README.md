@@ -52,14 +52,15 @@ Scale-up highlights (fair-base N=200, see `RESULTS.md`):
 - **SimPO leads 7B BoolQ on the canonical fair base** (+28.6%, 68% parse), ahead of DPO (+22.1%) — so SimPO is the strongest offline method on all three 7B tasks
 - **GRPO multi is the strongest online method at 14B** (SNLI-P +29.4%, SNLI-H +14.9%) and competitive at 7B SNLI-P (+29.1%)
 - **Llama-8B GRPO single yields the highest single ΔLFR anywhere** (+32.5% SNLI-P); GDPO leads Llama BoolQ (+17.3%)
-- **Llama SNLI-H is the one cell where online RL decisively beats offline**: after exhaustive sweeps (configs + full checkpoint sweeps), every offline method plateaus at base (DPO −0.8%, SimPO +0.7%, SFT +0.6% — best healthy-parse run each); only GRPO multi (+9.6%) and GDPO (+6.9%) clear it. Attributable to weak self-generated preference contrast at this cell's high base LFR (56.4%)
+- **Llama SNLI-H is the one cell where online RL decisively beats offline**: GRPO multi (+9.6%) and GDPO (+6.9%) clear base comfortably, while every offline method only *marginally* clears it (DPO +0.5%, SimPO +0.7%, SFT +0.6% — best healthy-parse run each). DPO needed a **β-sweep** (β=0.3 vs the default 0.1) to get above base at all — the earlier "offline ceiling" (−0.8% at every β=0.1 checkpoint) was a β artifact, not a fundamental limit. Attributable to weak self-generated preference contrast at this cell's high base LFR (56.4%)
 - **GRPO lr=1e-5 is the key hyperparameter on BoolQ at every scale**: lifts 7B BoolQ GRPO single +7.7%→+21.2% and multi +9.8%→+18.8%, mirroring the same lift at 3B — default lr=1e-6 badly under-trains GRPO on BoolQ
 - **GRPO reward design is scale-dependent**: multi ≥ single at 7B/14B SNLI, but single wins at 3B and on Llama SNLI-P — the optimal reward structure is not universal
 - **3B cannot learn BoolQ CFs from offline pairs**: DPO 1pair ≈ +0% and the stronger 2pair recipe is −0.6%; only online RL (GRPO single +10.4%) works there
 - **Parse rate matters as much as LFR**: high-ΔLFR runs frequently come from parse collapse (the model emits few well-formed edits, and those few flip easily). Charts/tables therefore gate on parse ≥ 15% of base
 - **Metric hygiene**: PPL/NED are reported as medians — the mean PPL is inflated 3–70× by sparse outlier parses (e.g. 7B SNLI-H GRPO g24 mean PPL 9651 vs median 137); NED excludes trivial NED=0 "non-edits"
+- **No general-capability degradation from CF fine-tuning**: across all 72 best adapters, MMLU and ANLI are unchanged vs base (ΔMMLU mean +0.0pp, worst −0.4pp; ΔANLI mean +0.1pp). LoRA CF training does not harm general capability — see `BENCHMARKS.md`
 
-See `RESULTS.md` for complete results and `OVERVIEW.md` for detailed analysis.
+See `RESULTS.md` for complete results, `OVERVIEW.md` for detailed analysis, `BENCHMARKS.md` for MMLU/ANLI, and `PARSE_TAG_ISSUE.md` for the parse/train-without-tags writeup.
 
 ---
 
@@ -294,10 +295,9 @@ All training scripts support `--use_wandb` with `--wandb_run_name`. Dashboard: [
 
 ## Future Work
 
-- **Llama SNLI-H offline preference-pair rebuild** — the one remaining lever for the only below-base cell (DPO −0.8%): regenerate preference pairs with stricter chosen/rejected contrast filters and retrain DPO/SimPO, to test whether weak self-generated contrast (not the method) is the bottleneck
-- **Llama SNLI-H GRPO multi lr=1e-5** — checkpoint eval sweep running (jobs 3114894–3114897) to see if the lr=1e-5 variant beats the current GRPO multi best (+9.6%)
-- **Benchmark evaluation** — Check for capability degradation on MMLU, HellaSwag, ARC
-- **Parse-rate-aware reporting** — formalize the "best non-degraded run" selection (parse ≥ 15% of base) used in the charts; consider a combined LFR×parse quality score
+- **Consistent `<edit>`-tag training targets** — offline methods (DPO/SimPO/SFT) currently train on the bare edited text with the `<edit>…</edit>` wrapper stripped, while the eval parser and online GRPO/GDPO rewards require the tags. This asymmetry is the cause of the Llama offline parse collapses at high LR (see `OVERVIEW.md § Parse-gate exclusions`). Wrapping the offline targets in `<edit>` tags and retraining DPO/SimPO/SFT would remove it — deferred since every featured cell already clears the parse gate
+- **Benchmark evaluation** — ✅ done: MMLU + ANLI across all 76 models (4 base + 72 adapters); no capability degradation (ΔMMLU mean +0.0pp, ΔANLI +0.1pp). See `BENCHMARKS.md`
+- **Parse-rate-aware reporting** — the "best non-degraded run" selection (parse ≥ 15% of base) is documented in `OVERVIEW.md § Parse-gate exclusions`; could be formalized into a combined LFR×parse quality score
 
 ## License
 

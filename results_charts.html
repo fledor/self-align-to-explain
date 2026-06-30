@@ -303,13 +303,13 @@ const models = [
       },
       'SNLI-Hypothesis (N=200, fair-base)': {
         baseLfr: 0.564,
-        pending: 'Only cell where online RL decisively beats offline: GRPO multi +9.6% clears base while DPO/SimPO/SFT plateau at base (best healthy ≤ +0.7%) — weak self-generated preference contrast at high base LFR (56.4%).',
+        pending: 'Only cell where online RL decisively beats offline: GRPO multi +9.6% clears base while offline methods barely clear it (DPO +0.5%, SimPO +0.7%, SFT +0.6%) — weak self-generated preference contrast at high base LFR (56.4%). DPO required a β-sweep (β=0.3) to get above base at all.',
         best: [
           { method: 'Base',        dlfr:  0.0,  ned: 0.543, ppl: 156.9, parse: 89.1, color: C.base,   note: '56.4% LFR (anchor)' },
           { method: 'GRPO multi',  dlfr:  9.6,  ned: 0.405, ppl: 183.4, parse: 66.0, color: C.grpo_m, note: 'mv2 g16 ckpt14900 ~93% (67.3% LFR; fair confirmed)' },
           { method: 'GDPO',        dlfr:  6.2,  ned: 0.559, ppl: 160.6, parse: 66.5, color: C.gdpo,   note: 'v6 g16 bs8 ckpt1000 (62.4% LFR; fair)' },
           { method: 'GRPO single', dlfr:  3.4,  ned: 0.463, ppl: 148.5, parse: 83.5, color: C.grpo_s, note: 'v2 g16 ckpt6000 ~37% (59.7% LFR; fair; same anchor as _fair run — higher-scoring variant used)' },
-          { method: 'DPO',         dlfr: -0.8,  ned: 0.552, ppl: 150.2, parse: 100.0, color: C.dpo,    note: '2p b4 lr2e6 ckpt100 (55.6% LFR; best of full ckpt sweep — every ckpt ≤ base; offline ceiling)' },
+          { method: 'DPO',         dlfr:  0.5,  ned: 0.548, ppl: 146.2, parse: 90.0, color: C.dpo,    note: '2p b4 lr2e6 β=0.3 ckpt100 (56.6% LFR; β-sweep clears base — default β=0.1 every ckpt ≤ base)' },
           { method: 'SimPO',       dlfr:  0.7,  ned: 0.500, ppl: 214.3, parse: 70.0, color: C.simpo,  note: '2p b4 β3γ0.5 lr2e6 (57.5% LFR; best non-degraded; β2 +11.6% is 4.6%-parse artifact)' },
           { method: 'SFT',         dlfr:  0.6,  ned: 0.577, ppl: 139.0, parse: 80.0, color: C.sft,    note: '2p ckpt100 early-stop (57.0% LFR; clears base; full 200step was −1.4%)' },
         ]

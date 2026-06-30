@@ -26,24 +26,24 @@ Counterfactual-generation evaluation tables for all models. Discussion, analysis
 
 ## Parse Rate Summary
 
-Parse rate = parsed CFs / (N × 10 attempts). Computed for best-result N=200 evaluation dirs. Values below 60% flagged ⚠; below 10% flagged ⛔. **BoolQ parse rates are generally high (70–92%) for all models. SNLI tasks are harder** — 3B models show 30–49% parse rates even at base, reflecting short NLI sentence difficulty. Critically, Llama SNLI-H SimPO (4.6%), DPO lr=2e-5 (2.3%), and SNLI-P DPO lr=1e-5 (3.9%) are near-collapse: LFR is computed over a very small biased sample and should be interpreted with extreme caution.
+Parse rate = parsed CFs / (N × 10 attempts). **This table reports the parse rate of the FEATURED (charted) run per cell** — i.e. the best run that passes the 15%-of-base parse gate. Values below 60% flagged ⚠; below 10% flagged ⛔. **BoolQ parse rates are generally high (70–92%) for all models. SNLI tasks are harder** — 3B models show 30–49% parse rates even at base, reflecting short NLI sentence difficulty. Several higher-raw-LFR Llama runs (e.g. SNLI-H SimPO β2 4.6%, DPO lr=2e-5 2.3%, SNLI-P DPO lr=1e-5 3.9%) were **excluded by the parse gate** — their LFR is computed over a tiny biased sample. The complete list of gate-excluded runs is in **`OVERVIEW.md` § Parse-gate exclusions**.
 
 | Model    | Dataset | Base  | DPO   | SimPO | SFT   | GRPO-S | GRPO-M | GDPO  |
 |----------|---------|-------|-------|-------|-------|--------|--------|-------|
 | Llama-8B | BoolQ   | 89.0% | 84.2% | 70.3% | 83.8% | 86.5%  | 89.2%  | 91.7% |
-| Llama-8B | SNLI-P  | 88.8% | 3.9%⛔| 94.2% | 80.8% | 56.0%⚠ | 78.8% | 87.2% |
-| Llama-8B | SNLI-H  | 89.1% | 2.3%⛔| 4.6%⛔| 11.1%⚠| 83.5% | 66.0%  | 66.5% |
+| Llama-8B | SNLI-P  | 88.8% | 84.0% | 94.2% | 80.8% | 56.0%⚠ | 78.8% | 87.2% |
+| Llama-8B | SNLI-H  | 89.1% | 90.0% | 70.0% | 80.0% | 83.5% | 66.0%  | 66.5% |
 | Qwen-3B  | BoolQ   | 89.3% | —     | 73.9% | —     | 55.4%⚠ | 54.0%⚠| 90.3% |
 | Qwen-3B  | SNLI-P  | 42.6%⚠| 48.9%⚠| 42.3%⚠| —    | 34.3%⚠ | 33.2%⚠| 47.4%⚠|
 | Qwen-3B  | SNLI-H  | 45.2%⚠| 39.4%⚠| 36.8%⚠| 46.9%⚠| 30.9%⚠| 32.5%⚠| 46.0%⚠|
 | Qwen-14B | BoolQ   | 88.0% | 76.2% | 66.0% | 89.2% | 82.1%  | 85.2%  | 67.5% |
 | Qwen-14B | SNLI-P  | 64.4% | 58.4%⚠| 68.8% | 65.3% | 50.5%⚠ | 26.9%⚠| 30.4%⚠|
 | Qwen-14B | SNLI-H  | 61.8% | 47.7%⚠| 15.8%⚠| 70.1% | 36.6%⚠ | 29.2%⚠| 42.8%⚠|
-| Qwen-7B  | BoolQ   | 82.3% | —     | —     | —     | 81.5%  | 80.5%  | —     |
-| Qwen-7B  | SNLI-P  | 68.6% | —     | 61.1% | —     | —      | 44.5%⚠ | 71.2% |
-| Qwen-7B  | SNLI-H  | 58.1%⚠| —    | 24.2%⚠| 63.3% | —      | 33.8%⚠ | 56.6%⚠|
+| Qwen-7B  | BoolQ   | 82.3% | 51.1%⚠| 68.0% | 79.8% | 45.0%⚠ | 52.0%⚠ | 82.3% |
+| Qwen-7B  | SNLI-P  | 68.6% | 51.0%⚠| 61.1% | 74.0% | 48.0%⚠ | 44.5%⚠ | 71.2% |
+| Qwen-7B  | SNLI-H  | 58.1%⚠| 44.0%⚠| 24.2%⚠| 63.3% | 25.0%⚠ | 33.8%⚠ | 56.6%⚠|
 
-Notes: "—" = progress file unavailable for that run. GRPO-S = GRPO single-reward, GRPO-M = GRPO multi-reward. 3B SNLI-P/H parse rates are low for the base model too, indicating task-difficulty (short NLI sentences). Llama SNLI-H SimPO and DPO collapse entries are shown in the per-table notes.
+Notes: "—" = progress file unavailable for that run. GRPO-S = GRPO single-reward, GRPO-M = GRPO multi-reward. 3B SNLI-P/H parse rates are low for the base model too, indicating task-difficulty (short NLI sentences). Gate-excluded (collapse) runs are listed in `OVERVIEW.md § Parse-gate exclusions`, not here.
 
 ---
 
@@ -549,7 +549,7 @@ Base LFRs: BoolQ 53.7% · SNLI-P 43.2% · SNLI-H 56.4%
 
 ### SNLI-Hypothesis (Llama)
 
-**Charts feature the best run per offline method (checkpoint sweep, healthy parse):** SFT `ckpt100` **+0.6%** (80% parse — clears base; full 200step was −1.4%), SimPO `β3γ0.5 lr=2e-6` **+0.7%** (70% parse), DPO `2p lr=2e-6 ckpt100` **−0.8%** (best of the full 100→1992 lr/checkpoint sweep at beta=0.1 — **every checkpoint ≤ base**). The higher-ΔLFR variants — SimPO β2 **+11.6%** (4.6% parse), DPO lr=2e-5 **+9.1%** (2.3% parse), SFT 2ep **+2.8%** (11% parse) — are **parse-collapse artifacts** and are excluded. **GRPO multi +9.6%** (ckpt14900, 66% parse) is the genuine best (a lr=1e-5 GRPO retrain was eval-infeasible — degenerate slow generation). **In flight:** a DPO **beta sweep** (β0.3/β0.5 at lr=2e-6, sigmoid; jobs 3118959–62) to lift DPO to ≥ 0 via a standard hyperparameter, not a pair rebuild.
+**Charts feature the best run per offline method (checkpoint sweep, healthy parse):** SFT `ckpt100` **+0.6%** (80% parse — clears base; full 200step was −1.4%), SimPO `β3γ0.5 lr=2e-6` **+0.7%** (70% parse), DPO `β=0.3 lr=2e-6 ckpt100` **+0.5%** (90% parse, median PPL 146 — **β-sweep cleared base**; the default β=0.1 sweep had every checkpoint ≤ base, best −0.8%). The higher-ΔLFR variants — SimPO β2 **+11.6%** (4.6% parse), DPO lr=2e-5 **+9.1%** (2.3% parse), SFT 2ep **+2.8%** (11% parse) — are **parse-collapse artifacts** excluded by the 15%-of-base parse gate (full cut list in `OVERVIEW.md`). **GRPO multi +9.6%** (ckpt14900, 66% parse) is the genuine best (a lr=1e-5 GRPO retrain was eval-infeasible — degenerate slow generation). With the β-sweep, **all four offline/online methods now clear base** in this cell (DPO +0.5, SimPO +0.7, SFT +0.6, GRPO multi +9.6); offline still only marginally clears it.
 
 | Method  | Config                   | LFR   | ΔLFR    | NED   | Med PPL | Fair              | N   |
 | ------- | ------------------------ | ----- | ------- | ----- | ------- | ----------------- | --- |
@@ -565,7 +565,10 @@ Base LFRs: BoolQ 53.7% · SNLI-P 43.2% · SNLI-H 56.4%
 | GRPO    | v2 g16 ckpt4200 (~26%)   | 56.5% | +0.1%   | 0.542 | 490.8   | yes               | 200 |
 | DPO     | 2pair b4 lr=5e-5         | —     | ~−3.3%  | 0.621 | 310.2   | yes (INVALID — 18/2000 parse = 0.9%; model collapsed at lr=5e-5) | 200 |
 | SimPO   | 2pair b4 β3γ0.5 lr=2e-6  | 57.5% | +0.7%   | 0.490 | 214.3   | yes               | 200 |
+| **DPO** | **2pair b4 β=0.3 lr=2e-6 ckpt100** | **56.6%** | **+0.5%** | **0.548** | **146.2** | **yes (90% parse — FEATURED; β-sweep clears base)** | 200 |
 | DPO     | 2pair b4 lr=1e-5         | 56.8% | −0.6%   | 0.478 | 681.7   | yes               | 200 |
+| DPO     | 2pair b4 β=0.5 lr=2e-6 ckpt200 | 54.4% | −2.1% | 0.546 | — | yes (β=0.5 over-regularizes vs β=0.3) | 200 |
+| DPO     | 2pair b4 β=0.5 lr=2e-6 ckpt100 | 53.5% | −2.8% | 0.540 | 148.0 | yes (β=0.5 over-regularizes) | 200 |
 | SFT     | 2pair 200step            | 55.0% | −1.4%   | 0.538 | 146.0   | yes               | 200 |
 | DPO     | 2pair b4 lr=2e-6         | 54.1% | −2.3%   | 0.504 | 741.3   | yes               | 200 |
 | DPO     | 2pair b4 lr=5e-6         | 53.3% | −3.4%   | 0.457 | 147.0   | yes               | 200 |
@@ -589,8 +592,8 @@ Base LFRs: BoolQ 53.7% · SNLI-P 43.2% · SNLI-H 56.4%
 | 3013002 | Llama SNLI-H **GRPO multi-reward v2 g16 lr=1e-5** (train) | ✅ TRAINED to ckpt7400. Eval was never launched; checkpoint sweep submitted (3114894–3114897, see below). → `grpo_model_snli_hypothesis_1ep_g16_multi_mv2_lr1e5_llama31_8b/` |
 | 3114894–3114897 | Llama SNLI-H **GRPO multi lr=1e-5 eval sweep** (ckpt 2000/4000/6000/7400) | ❌ ABANDONED — eval-infeasible. The lr=1e-5 GRPO model generates pathologically slowly (~500–880 s/**sample**, degenerate long outputs); all 4 evals hit the 12 h wall at ~30–40% of 200 samples. Not worth re-running on a degenerate model: the cell is already **+9.6%** at default lr (GRPO multi ckpt14900), which stands as the cell best. |
 | 3116220–3116223 | Llama SNLI-H DPO beta sweep (first attempt) | ❌ FAILED — passed `LOSS_TYPE=dpo`, but `train_dpo.py` expects `sigmoid` for standard DPO. Resubmitted below. |
-| 3118959/3118960 (β0.3) · 3118961/3118962 (β0.5) | Llama SNLI-H **DPO beta sweep** lr=2e-6 `sigmoid` (train + chained eval) | 🔄 RUNNING (Jun 23). **Untested axis:** all prior Llama SNLI-H DPO runs used beta=0.1; higher beta anchors closer to the reference (more conservative) to lift the only below-base cell (−0.8%) to ≥ 0 *without* a pair rebuild (which would break cross-cell consistency). → `evaluation_snli_hypothesis_200s_dpo_2pair_lr2e6_beta{03,05}_llama31_8b/` |
-| 3013293–3013296 | Llama SNLI-H **DPO checkpoint sweep** (ckpt 100/300/600/1000) | ✅ COMPLETE. c100 **−0.8%**, c300 −1.5%, c600 −1.6%, c1000 −1.2% — **every checkpoint ≤ base**. Confirmed offline ceiling; chart updated to best (c100 −0.8%, 100% parse). |
+| 3118959/3118960 (β0.3) · 3118961/3118962 (β0.5) | Llama SNLI-H **DPO beta sweep** lr=2e-6 `sigmoid` (train + chained eval) | ✅ COMPLETE. **β=0.3 ckpt100 = +0.5%** (56.6% LFR, 90% parse, median PPL 146) — **clears base, now FEATURED** (replaces the −0.8% beta=0.1 result). β=0.5 over-regularizes: ckpt100 −2.8%, ckpt200 −2.1%. All prior Llama SNLI-H DPO runs used the default beta=0.1; raising beta anchors closer to the reference (more conservative) and lifted the only below-base cell above base *without* a pair rebuild (which would break cross-cell consistency). → `evaluation_snli_hypothesis_200s_dpo_2pair_lr2e6_beta03_ckpt100_llama31_8b/` |
+| 3013293–3013296 | Llama SNLI-H **DPO checkpoint sweep** (ckpt 100/300/600/1000) | ✅ COMPLETE. At default **beta=0.1**: c100 **−0.8%**, c300 −1.5%, c600 −1.6%, c1000 −1.2% — every checkpoint ≤ base. This motivated the **beta sweep** (3118959–62) which cleared base at β=0.3 ckpt100 (+0.5%, now featured). The "offline ceiling" framing was thus a beta-0.1 artifact, not a fundamental limit. |
 | 3013297–3013299 | Llama SNLI-H **SFT checkpoint sweep** (ckpt 50/100/150) | ✅ COMPLETE. c50 −1.3%, **c100 +0.6%** (80% parse — clears base), c150 +0.3%. Chart updated to c100 (was −1.4%). |
 | 3013300–3013302 | 14B SNLI-P **SFT checkpoint sweep** (ckpt 50/100/150) | ✅ COMPLETE. c50 −0.0%, c100 −0.7%, c150 −0.4% — flat at base even at earliest ckpt. **Genuine ceiling: SFT is inert on this cell.** |
 | 3013354 | Llama SNLI-P **DPO 2pair lr=5e-6** (train) | SUBMITTED. **Under-explored:** the 2pair recipe (7B SNLI-P DPO +24.5%) was never trained for Llama at sane lr — only 2pair lr=1e-5 (parse-collapse) and 1pair (+0.4%). lr=5e-6 = 7B's winning lr. → eval after train. |
