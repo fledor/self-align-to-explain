@@ -9,7 +9,7 @@ Counterfactual-generation evaluation tables for all models. Discussion, analysis
 - **NED** (Normalized Edit Distance): edit distance / max text length (lower = more minimal edits). **Aggregation**: **median** NED over CFs with NED > 0 (identical copies excluded — those are not counterfactuals by definition; see [RGF, ACL 2022](https://aclanthology.org/2022.acl-long.117)). Best-result N=200 entries use this corrected median; historical/secondary entries may use mean NED from `eval_summary.avg_norm_edit_distance`.
 - **PPL** (Perplexity): fluency of generated text (lower = more fluent). **Aggregation**: **median** PPL across generated CFs (robust to degenerate outlier CFs; mean is 3–27× higher when a few CFs have catastrophic loss). All canonical N=200 best results use median. Note: some historical/secondary entries (N=100 grid, early checkpoint sweeps, or collapsed-model runs) may still show mean PPL from `eval_summary.avg_perplexity` — do not compare those to median values.
 - **LFR/NED**: label flip rate / normalized edit distance — edit efficiency (higher = more effective per unit of change). Reported in individual eval reports for N=200 runs.
-- **Fair**: whether base model counterfactuals were reused across evaluations (`--base_eval_dir`) for consistent comparison
+- **Fair evaluation**: N=200 validation samples, 10 CFs per sample. Within each model×dataset, all methods reuse the **same frozen base counterfactual set** (`--base_eval_dir` + cached base verdicts) so ΔLFR comparisons are against an identical base LFR. Numbers in `results_charts.html` and `best_models/` reflect this protocol.
 - **N**: number of validation samples evaluated (10 CFs generated per sample)
 - **Parsed CFs only**: metrics are averaged over CFs with a non-null parsed `edited_text`. Fair evals (`--base_eval_dir`) reuse the same stored base CFs for the base side.
 - **Parse rate** (`parse%`): fraction of the 10×N generation attempts that produced a valid `<edit>…</edit>` output. All metrics (LFR, NED, PPL) are computed **only over parsed CFs**. Low parse rate means the reported LFR is over a small, potentially biased sample — ⚠ < 60%, ⛔ < 10%. **Selection rule:** the run *featured* per method-cell in `results_charts.html` is the best ΔLFR run with **parse ≥ 15% of the base parse rate** — high-ΔLFR runs at near-zero parse are collapse artifacts (a model emitting few well-formed edits, all easy to flip) and are excluded from selection. See [parse rate summary below](#parse-rate-summary) and [OVERVIEW.md § CF coverage](OVERVIEW.md#cf-coverage-and-parse-rates) for analysis.
@@ -26,22 +26,22 @@ Counterfactual-generation evaluation tables for all models. Discussion, analysis
 
 ## Parse Rate Summary
 
-Parse rate = parsed CFs / (N × 10 attempts). **This table reports the parse rate of the FEATURED (charted) run per cell** — i.e. the best run that passes the 15%-of-base parse gate. Values below 60% flagged ⚠; below 10% flagged ⛔. **BoolQ parse rates are generally high (70–92%) for all models. SNLI tasks are harder** — 3B models show 30–49% parse rates even at base, reflecting short NLI sentence difficulty. Several higher-raw-LFR Llama runs (e.g. SNLI-H SimPO β2 4.6%, DPO lr=2e-5 2.3%, SNLI-P DPO lr=1e-5 3.9%) were **excluded by the parse gate** — their LFR is computed over a tiny biased sample. The complete list of gate-excluded runs is in **`OVERVIEW.md` § Parse-gate exclusions**.
+Parse rate = parsed CFs / (N × 10 attempts). **This table reports the parse rate of the FEATURED (charted) run per cell** — i.e. the best run that passes the 15%-of-base parse gate. **⚠ Terminology (Jul 3):** this "parse rate" is *unique* parsed CFs / attempts, so it conflates **format-compliance** (emitted a valid edit) with **diversity** (non-duplicate rate). The dual-parse diagnostic (`PARSE_TAG_ISSUE.md §9`) shows every **featured** cell is ~100% *compliant* — the sub-100% figures here are mostly **deduplication**, not tag loss. Compliance and diversity are reported decoupled by `evaluate_models.py --dual_parse`. Values below 60% flagged ⚠; below 10% flagged ⛔. **BoolQ parse rates are generally high (70–92%) for all models. SNLI tasks are harder** — 3B models show 30–49% parse rates even at base, reflecting short NLI sentence difficulty. Several higher-raw-LFR Llama runs (e.g. SNLI-H SimPO β2 4.6%, DPO lr=2e-5 2.3%, SNLI-P DPO lr=1e-5 3.9%) were **excluded by the parse gate** — their LFR is computed over a tiny biased sample. The complete list of gate-excluded runs is in **`OVERVIEW.md` § Parse-gate exclusions**.
 
 | Model    | Dataset | Base  | DPO   | SimPO | SFT   | GRPO-S | GRPO-M | GDPO  |
 |----------|---------|-------|-------|-------|-------|--------|--------|-------|
-| Llama-8B | BoolQ   | 89.0% | 84.2% | 70.3% | 83.8% | 86.5%  | 89.2%  | 91.7% |
-| Llama-8B | SNLI-P  | 88.8% | 84.0% | 94.2% | 80.8% | 56.0%⚠ | 78.8% | 87.2% |
-| Llama-8B | SNLI-H  | 89.1% | 90.0% | 70.0% | 80.0% | 83.5% | 66.0%  | 66.5% |
-| Qwen-3B  | BoolQ   | 89.3% | —     | 73.9% | —     | 55.4%⚠ | 54.0%⚠| 90.3% |
-| Qwen-3B  | SNLI-P  | 42.6%⚠| 48.9%⚠| 42.3%⚠| —    | 34.3%⚠ | 33.2%⚠| 47.4%⚠|
+| Llama-8B | BoolQ   | 89.0% | 84.2% | 70.3% | 83.8% | 86.5%  | 89.2%  | 91.6% |
+| Llama-8B | SNLI-P  | 88.8% | 74.2% | 94.2% | 82.4% | 57.8%⚠ | 78.8% | 87.2% |
+| Llama-8B | SNLI-H  | 89.1% | 83.9% | 81.2% | 71.7% | 83.5% | 65.0%  | 65.8% |
+| Qwen-3B  | BoolQ   | 89.3% | 87.4% | 74.9% | 92.8% | 55.4%⚠ | 54.0%⚠| 90.3% |
+| Qwen-3B  | SNLI-P  | 42.6%⚠| 50.8%⚠| 41.1%⚠| 46.9%⚠| 34.3%⚠ | 33.2%⚠| 46.5%⚠|
 | Qwen-3B  | SNLI-H  | 45.2%⚠| 39.4%⚠| 36.8%⚠| 46.9%⚠| 30.9%⚠| 32.5%⚠| 46.0%⚠|
-| Qwen-14B | BoolQ   | 88.0% | 76.2% | 66.0% | 89.2% | 82.1%  | 85.2%  | 67.5% |
-| Qwen-14B | SNLI-P  | 64.4% | 58.4%⚠| 68.8% | 65.3% | 50.5%⚠ | 26.9%⚠| 30.4%⚠|
+| Qwen-14B | BoolQ   | 87.9% | 76.1% | 66.0% | 89.2% | 82.1%  | 85.2%  | 67.5% |
+| Qwen-14B | SNLI-P  | 64.4% | 58.4%⚠| 68.8% | 65.3% | 50.5%⚠ | 27.4%⚠| 29.3%⚠|
 | Qwen-14B | SNLI-H  | 61.8% | 47.7%⚠| 15.8%⚠| 70.1% | 36.6%⚠ | 29.2%⚠| 42.8%⚠|
-| Qwen-7B  | BoolQ   | 82.3% | 51.1%⚠| 68.0% | 79.8% | 45.0%⚠ | 52.0%⚠ | 82.3% |
-| Qwen-7B  | SNLI-P  | 68.6% | 51.0%⚠| 61.1% | 74.0% | 48.0%⚠ | 44.5%⚠ | 71.2% |
-| Qwen-7B  | SNLI-H  | 58.1%⚠| 44.0%⚠| 24.2%⚠| 63.3% | 25.0%⚠ | 33.8%⚠ | 56.6%⚠|
+| Qwen-7B  | BoolQ   | 82.3% | 51.1%⚠| 55.7%⚠| 79.8% | 45.4%⚠ | 52.3%⚠ | 82.3% |
+| Qwen-7B  | SNLI-P  | 68.6% | 50.9%⚠| 61.2% | 74.5% | 47.6%⚠ | 44.5%⚠ | 71.2% |
+| Qwen-7B  | SNLI-H  | 58.1%⚠| 44.1%⚠| 24.2%⚠| 63.3% | 24.5%⚠ | 33.8%⚠ | 56.6%⚠|
 
 Notes: "—" = progress file unavailable for that run. GRPO-S = GRPO single-reward, GRPO-M = GRPO multi-reward. 3B SNLI-P/H parse rates are low for the base model too, indicating task-difficulty (short NLI sentences). Gate-excluded (collapse) runs are listed in `OVERVIEW.md § Parse-gate exclusions`, not here.
 
@@ -564,8 +564,10 @@ Base LFRs: BoolQ 53.7% · SNLI-P 43.2% · SNLI-H 56.4%
 | SFT     | 2pair 2ep                | 62.2% | +2.8%   | 0.571 | 203.7   | yes (note: _fair rerun dir shows −6.5% due to stale-resume bug — discard) | 200 |
 | GRPO    | v2 g16 ckpt4200 (~26%)   | 56.5% | +0.1%   | 0.542 | 490.8   | yes               | 200 |
 | DPO     | 2pair b4 lr=5e-5         | —     | ~−3.3%  | 0.621 | 310.2   | yes (INVALID — 18/2000 parse = 0.9%; model collapsed at lr=5e-5) | 200 |
-| SimPO   | 2pair b4 β3γ0.5 lr=2e-6  | 57.5% | +0.7%   | 0.490 | 214.3   | yes               | 200 |
-| **DPO** | **2pair b4 β=0.3 lr=2e-6 ckpt100** | **56.6%** | **+0.5%** | **0.548** | **146.2** | **yes (90% parse — FEATURED; β-sweep clears base)** | 200 |
+| **DPO** | **2pair lr=2e-5 tag-native** | **62.7%** | **+4.0%** | **0.414** | **117.5** | **yes (84% parse — FEATURED)** | 200 |
+| SimPO   | 2pair simpo b2γ0.5 tag-native | 61.7% | +3.0%   | 0.409 | 161.4   | yes (81% parse — FEATURED) | 200 |
+| SimPO   | 2pair b4 β3γ0.5 lr=2e-6  | 57.5% | +0.7%   | 0.490 | 214.3   | yes (superseded by tag-native retrain) | 200 |
+| DPO     | 2pair b4 β=0.3 lr=2e-6 ckpt100 | 56.6% | +0.5% | 0.548 | 146.2 | yes (superseded by tag-native retrain) | 200 |
 | DPO     | 2pair b4 lr=1e-5         | 56.8% | −0.6%   | 0.478 | 681.7   | yes               | 200 |
 | DPO     | 2pair b4 β=0.5 lr=2e-6 ckpt200 | 54.4% | −2.1% | 0.546 | — | yes (β=0.5 over-regularizes vs β=0.3) | 200 |
 | DPO     | 2pair b4 β=0.5 lr=2e-6 ckpt100 | 53.5% | −2.8% | 0.540 | 148.0 | yes (β=0.5 over-regularizes) | 200 |
@@ -584,10 +586,19 @@ Base LFRs: BoolQ 53.7% · SNLI-P 43.2% · SNLI-H 56.4%
 
 ---
 
+## Active / Pending Jobs (submitted Jul 7, 2026)
+
+| Job ID | Name | Status |
+|--------|------|--------|
+| 3148850 / 3148851 | **Frozen-base re-verify** (72 featured cells: 12 anchor-freeze + 60 dependent; RTXA6000, `--deterministic`, reuse saved gens) | ✅ COMPLETE (72/72). All 12 canonical anchors now have `base_cfs_verified.jsonl`; base LFR identical across methods within every model×dataset cell. Featured method per cell unchanged; ΔLFR moves ≤1.5pp vs prior numbers except a few near-zero SFT/GDPO baselines (honestly ±0). Charts / `best_models` / docs updated. Scripts: `submit_frozen_reeval_all.sh`, `agg_frozen_reeval.py`. |
+| 3147217 / 3147218 | Llama SNLI-H **tag-native retrain** re-eval (DPO lr2e5 + SimPO b2γ0.5, frozen anchor) | ✅ COMPLETE. DPO **+4.0%** (62.7% LFR, 84% parse), SimPO **+3.0%** (61.7% LFR, 81% parse) — both now featured for Llama SNLI-H offline. |
+| 3131463 | **Dual-parse diagnostic** (26 cells) | ✅ COMPLETE (26/26). Internal validation only; featured picks unchanged. See `DUAL_PARSE_RESULTS.md`, `PARSE_TAG_ISSUE.md`. |
+
 ## Active / Pending Jobs (submitted May 30, 2026)
 
 | Job ID | Name | Status |
 |--------|------|--------|
+| 3131463 | **Dual-parse diagnostic** (26 cells: all SimPO + Llama DPO/SFT + 4 gate-excluded Llama + 4 tag-clean controls) | ✅ COMPLETE (26/26). Strict vs. lenient-fallback parser on **identical** generations, anchors frozen, compliance decoupled from diversity (`evaluate_models.py --dual_parse`). **Result:** controls strict≡fallback (|ΔLFR|≤0.4pp); **featured picks unchanged — 0/12 cells, no new bests** (ΔLFR moves ≤3.2pp); **gate-excluded Llama runs genuinely re-qualify** — SNLI-H DPO lr2e5 **+9.9%**, SNLI-H SimPO b2 **+8.1%**, SNLI-P DPO 1p-lr1e5 **+6.8%** (SNLI-H SFT 2ep stays out at −2.8%). Featured matrix stands; retrain only Llama offline (DPO/SimPO SNLI-H + DPO SNLI-P) with tags. Full: `DUAL_PARSE_RESULTS.md`, `PARSE_TAG_ISSUE.md §9`. (Note: first submit 3130946 failed all 26 on GPU-broken node serv-9219; resubmitted with `--exclude`.) |
 | 3013001 | 7B BoolQ SimPO b3γ0.5 **fair re-eval** (canonical base `05b8d14619`) | ✅ COMPLETE. **+28.6%** (66.7% LFR, base 38.1%, NED 0.115, PPL 8.8, 68% parse). On the canonical base SimPO is the **7B BoolQ best**, ahead of DPO +22.1%. Chart/RESULTS/README updated; ⚠ removed. → `evaluation_boolq_200s_simpo_b3g05_fair/` |
 | 3013002 | Llama SNLI-H **GRPO multi-reward v2 g16 lr=1e-5** (train) | ✅ TRAINED to ckpt7400. Eval was never launched; checkpoint sweep submitted (3114894–3114897, see below). → `grpo_model_snli_hypothesis_1ep_g16_multi_mv2_lr1e5_llama31_8b/` |
 | 3114894–3114897 | Llama SNLI-H **GRPO multi lr=1e-5 eval sweep** (ckpt 2000/4000/6000/7400) | ❌ ABANDONED — eval-infeasible. The lr=1e-5 GRPO model generates pathologically slowly (~500–880 s/**sample**, degenerate long outputs); all 4 evals hit the 12 h wall at ~30–40% of 200 samples. Not worth re-running on a degenerate model: the cell is already **+9.6%** at default lr (GRPO multi ckpt14900), which stands as the cell best. |

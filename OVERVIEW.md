@@ -2,20 +2,20 @@
 
 Comparing post-training self-alignment methods for improving counterfactual generation quality. **Primary results** below fine-tune **Qwen/Qwen2.5-7B-Instruct** using QLoRA (4-bit, LoRA r=32, alpha=16, lr=5e-6) on three NLI/classification datasets. Scale-ups to **Qwen2.5-14B-Instruct** and **Qwen2.5-3B-Instruct** are fully model-native (see [RESULTS.md](RESULTS.md)). Use `submit_model_pipeline.sh` / `submit_3b_pipeline.sh` to switch models.
 
-**Last updated**: Jun 30, 2026. **Paper-readiness pass**: full 12-cell × 6-method matrix (4 models × 3 datasets) is fair N=200 with medians for NED (NED>0) and PPL throughout. **Every featured cell now clears base** — the last holdout, **Llama SNLI-H DPO**, was lifted from −0.8% to **+0.5%** by a **β-sweep** (β=0.3 ckpt100, 90% parse, median PPL 146); the earlier "offline ceiling" was a default-β=0.1 artifact, not a fundamental limit (online RL still wins this cell decisively — GRPO multi +9.6%). Offline methods only marginally clear base here (DPO +0.5, SimPO +0.7, SFT +0.6). **New § Parse-gate exclusions** (§7) documents the 18 runs the 15%-of-base parse gate drops — all Llama, none Qwen — and the offline-vs-online `<edit>`-tag training asymmetry behind the Llama offline parse collapses.
+**Last updated**: Jul 7, 2026. **Featured matrix**: 4 models × 3 datasets × 6 methods, fair N=200 with median NED (NED>0) and median PPL. Within each model×dataset, base counterfactual verdicts are **frozen once** and reused across all methods so every ΔLFR in a cell shares an identical base LFR. Charts: [results_charts.html](results_charts.html). Internal reproducibility notes: `PARSE_TAG_ISSUE.md` (not required for the thesis narrative).
 
 ### Qwen2.5-14B-Instruct scale-up
 
 - **14B matrix complete** (6 methods × 3 datasets, all fair N=200). Full results: [RESULTS.md — 14B](RESULTS.md#qwen25-14b-instruct).
 - **Fair base:** BoolQ → `evaluation_boolq_200s_dpo_1pair_b4_2ep_qwen25_14b/`, SNLI-P → `evaluation_snli_premise_200s_grpo_mv2_g16_qwen25_14b_v2fix/`, SNLI-H → `evaluation_snli_hypothesis_200s_gdpo_v6_qwen25_14b_v2fix/`. Script: `run_eval_14b_fair.sh`.
-- **Headline 14B fair N=200:** BoolQ best **SimPO** (+7.0%), **GDPO** (+6.0%), **GRPO single** (+2.9%); SNLI-P best **GRPO multi** (**+29.8%** fair, original mv2 1ep), **GDPO v6** (+26.5%), **SimPO**/**GRPO single** (+22.7% ea.; the v2fix GRPO-multi retrain only reached +15.0%); SNLI-H best **GRPO multi** (+14.9%), **SimPO** (+13.7%), **GRPO single** (+11.6%).
+- **Headline 14B fair N=200:** BoolQ best **SimPO** (+7.4%), **GDPO** (+5.7%), **GRPO single** (+2.5%); SNLI-P best **GRPO multi** (**+30.1%**), **GDPO v6** (+26.5%), **SimPO**/**GRPO single** (+22.3% ea.); SNLI-H best **GRPO multi** (+15.1%), **SimPO** (+13.7%), **GRPO single** (+11.6%).
 - **Charts:** [results_charts.html](results_charts.html).
 
 ### Qwen2.5-3B-Instruct scale-up
 
 - **3B pipeline:** `submit_3b_pipeline.sh`, evals via `run_eval_3b_fair.sh`. Fair anchors: BoolQ → `evaluation_boolq_200s_dpo_1pair_qwen25_3b/`, SNLI-P/H analogous.
 - **3B matrix complete** (6 methods × 3 datasets, all fair N=200). Hyperparam LR variants now also complete. See [RESULTS.md — 3B](RESULTS.md#qwen25-3b-instruct).
-- **Headline 3B results:** SNLI-P best **GRPO single lr=1e-5** (**+27.7%**) > **SimPO** (+25.5%) ≈ **GRPO multi lr=1e-5** (+25.2%); **GDPO** (+18.5%); SNLI-H best **GDPO** (**+15.2%** fair), **DPO/GRPO multi** (+7.3% ea.), **SimPO β=3** (+6.8%); BoolQ best **GRPO single lr=1e-5** (+10.4%), **GRPO multi lr=1e-5** (+7.6%), **SimPO β=2** (+6.1%). **Key finding**: lr=1e-5 dramatically helps 3B GRPO — +10.8pp on SNLI-P single, +1.6pp on BoolQ multi vs default lr.
+- **Headline 3B results:** SNLI-P best **GRPO single lr=1e-5** (**+27.1%**) > **SimPO** (+25.8%) ≈ **GRPO multi lr=1e-5** (+25.6%); **GDPO** (+17.7%); SNLI-H best **GDPO** (**+15.1%**), **DPO/GRPO multi** (+7.3% ea.), **SimPO β=3** (+6.7%); BoolQ best **GRPO single lr=1e-5** (+11.0%), **GRPO multi lr=1e-5** (+8.2%), **SimPO β=2** (+7.5%).
 
 ### KTO (Kahneman-Tversky Optimization)
 
@@ -352,12 +352,11 @@ GDPO's normalization operates within each group of `num_generations=16` completi
 
 ## 7. Evaluation Methodology
 
-- **Fair-base comparison**: base model counterfactuals are generated once and reused across all model evaluations via `--base_eval_dir`, ensuring ΔLFR differences reflect the fine-tuned model's quality rather than base model generation variance
-- **Standard evaluation**: 200 validation samples, 10 CFs per sample, fair-base reused (previously 100; standardized to 200 for lower variance)
+- **Fair-base comparison**: base model counterfactuals are generated once per model×dataset and reused across all method evaluations via `--base_eval_dir`. Base-model **verdicts** (label-flip judgments) are cached in `base_cfs_verified.jsonl` on the anchor so every method in a cell shares an **identical base LFR**
+- **Standard evaluation**: 200 validation samples, 10 CFs per sample, fair-base reused
 - **LFR/NED efficiency metric**: label flip rate divided by normalized edit distance, rewarding methods that achieve high flip rates with minimal edits (higher = more efficient). Reported in N=200 eval reports.
 - **NED aggregation (updated)**: Best-result N=200 NED values now use **median NED over CFs with NED > 0** (identical copies excluded — they are not counterfactuals by definition, and their inclusion inflates the LFR denominator unfairly; see discussion in `RESULTS.md` and RGF, ACL 2022). Historical/secondary entries still report mean NED from `eval_summary.avg_norm_edit_distance`. Note: NED=0 entries **are still counted in the LFR denominator** — they represent a genuine model failure to produce an edit.
 - **Base model as judge**: the un-fine-tuned base model classifies all counterfactuals (both base-generated and fine-tuned-generated) to determine label flips
-- **Evaluation variance**: base LFR varies 2-5pp across independent runs; differences below ~5pp should be treated cautiously
 
 ### Parse-gate exclusions
 
@@ -369,8 +368,8 @@ GDPO's normalization operates within each group of `num_generations=16` completi
 
 | Cell | Excluded (higher ΔLFR, sub-gate) | Featured (gate-passing) |
 |------|----------------------------------|--------------------------|
-| Llama SNLI-H DPO   | lr=2e-5 **+9.1%** @ 2.3% parse | β=0.3 ckpt100 **+0.5%** @ 90% parse |
-| Llama SNLI-H SimPO | β2γ0.5 **+11.6%** @ 4.6% parse | β3γ0.5 **+0.7%** @ 70% parse |
+| Llama SNLI-H DPO   | lr=2e-5 +9.1% @ 2.3% parse (sub-gate) | tag-native retrain **+4.0%** @ 84% parse |
+| Llama SNLI-H SimPO | β2γ0.5 +11.6% @ 4.6% parse (sub-gate) | tag-native retrain **+3.0%** @ 81% parse |
 | Llama SNLI-H SFT   | 2ep **+2.8%** @ 11.1% parse | ckpt100 **+0.6%** @ 72% parse |
 | Llama SNLI-P DPO   | 1pair lr=1e-5 **+10.3%** @ 3.9% parse | 2pair lr=2e-6 **+2.4%** @ 74% parse |
 
@@ -399,7 +398,11 @@ In every other cell the gate dropped some weak candidate runs but the best run w
 | Llama | SNLI-P | DPO        |  3.9% | 13.3% | +10.3 | `..._snli_premise_200s_dpo_1pair_lr1e5_llama31_8b` |
 | Llama | SNLI-P | DPO        | 13.2% | 13.3% |  +2.2 | `..._snli_premise_200s_dpo_2pair_lr5e6_llama31_8b` (just under gate) |
 
-**Why these collapsed — a known asymmetry, not a silent bug.** Every excluded run is an *offline* method (DPO/SimPO/SFT) at an aggressive LR, plus two lr=1e-5 GRPO-multi runs that genuinely diverged. The offline preference/SFT targets are trained on the **bare edited text with the `<edit>…</edit>` wrapper stripped** (`construct_dpo_pairs.py` uses `chosen_cf["edited_text"]`; `train_sft.py` uses `prompt + chosen`), whereas the eval parser and the online GRPO/GDPO rewards (`FormatReward`, `MinimalityReward`) require the tags. At low LR the few-shot prompt keeps the format and parse stays healthy (DPO/SimPO/SFT featured runs are 70–94% parse); at high LR the offline objective overrides the prompt and the model stops emitting tags, collapsing parse. The gate is what prevents these collapsed-but-high-LFR runs from being mistaken for wins. Fully removing the asymmetry would require wrapping the offline training targets in `<edit>` tags and retraining DPO/SimPO/SFT — deferred (results already clear the gate in every featured cell).
+**Why these collapsed — a known asymmetry, not a silent bug.** Every excluded run is an *offline* method (DPO/SimPO/SFT) at an aggressive LR, plus two lr=1e-5 GRPO-multi runs that genuinely diverged. The offline preference/SFT targets are trained on the **bare edited text with the `<edit>…</edit>` wrapper stripped** (`construct_dpo_pairs.py` uses `chosen_cf["edited_text"]`; `train_sft.py` uses `prompt + chosen`), whereas the eval parser and the online GRPO/GDPO rewards (`FormatReward`, `MinimalityReward`) require the tags. At low LR the few-shot prompt keeps the format and parse stays healthy (DPO/SimPO/SFT featured runs are 70–94% parse); at high LR the offline objective overrides the prompt and the model stops emitting tags, collapsing parse. The gate is what prevents these collapsed-but-high-LFR runs from being mistaken for wins.
+
+**Parse rate is really two metrics (clarification).** What we called "parse rate" = *unique* parsed CFs / attempts — it conflates **format-compliance** (did the model emit a valid edit) with **diversity** (how many were non-duplicates). The dedup component is not "parsing" and shouldn't have been reported as such. Going forward: **compliance** = parsed / attempts *including duplicates*; **diversity** = unique / parsed (see `evaluate_models.py --dual_parse`, which decouples them). Under this definition every **Qwen** cell and every **featured** cell is ~100% compliant; the sub-100% old "parse" numbers on tag-clean cells were diversity, not tag loss.
+
+**Dual-parse diagnostic (Jul 3, 2026) — what the gate cost us, measured.** We re-scored the affected cells with both the strict parser and a lenient fallback on **identical** generations (`run_dual_parse_diag.sh`, 26 cells, anchors frozen; full write-up `PARSE_TAG_ISSUE.md §9`, numbers `DUAL_PARSE_RESULTS.md`). Findings: (a) tag-clean **controls** are strict≡fallback (|ΔLFR|≤0.4pp) → the ~50 non-affected cells need no re-eval; (b) **featured picks are unchanged — 0 of 12 cells change their best method**, and ΔLFR moves ≤3.2pp, so the headline matrix is reliable and needs no retraining; (c) **3 of the 4 gate-changed Llama cells genuinely re-qualify** under honest compliance — **Llama SNLI-H DPO lr2e5 +9.9%**, SNLI-H SimPO b2 +8.1%, SNLI-P DPO 1pair-lr1e5 +6.8% — while the currently-featured Llama SNLI-H DPO (β=0.3) drifts to −2.4%, and SNLI-H SFT correctly stays out (−2.8%). **Action:** keep the featured matrix; **retrain only Llama offline (DPO/SimPO SNLI-H + DPO SNLI-P) with `<edit>` tags** so the real gains are natively strict-parseable — a targeted root-cause fix, not a global re-run.
 
 ### General-capability benchmarks (MMLU + ANLI)
 

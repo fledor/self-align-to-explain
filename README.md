@@ -29,38 +29,38 @@ Best ΔLFR (label flip rate improvement over base model) per method, using fair-
 | Method              | BoolQ       | SNLI-Premise | SNLI-Hypothesis |
 | ------------------- | ----------- | ------------ | --------------- |
 | **DPO**             | +22.1%      | +24.5%       | +23.2%          |
-| SimPO               | **+28.6%**  | **+30.5%**   | **+29.4%**      |
-| SFT                 | +9.6%       | +1.8%        | +1.7%           |
-| GRPO (best variant) | +21.2%      | +29.1%       | +22.6%          |
-| GDPO v6 (best ckpt) | +1.1%       | +18.2%       | +18.7%          |
+| SimPO               | **+28.9%**  | **+31.5%**   | **+31.1%**      |
+| SFT                 | +9.4%       | +0.4%        | +1.8%           |
+| GRPO (best variant) | +21.5%      | +27.4%       | +20.7%          |
+| GDPO v6 (best ckpt) | −0.2%       | +16.5%       | +17.7%          |
 
-On the canonical fair base, **SimPO leads 7B BoolQ** (+28.6%, 68% parse), ahead of DPO (+22.1%). GRPO with **lr=1e-5** jumps to +21.2% (single) / +18.8% (multi), up from +7.7% / +9.8% at the default lr — the same lr lift seen at 3B.
+On the canonical fair base, **SimPO leads 7B BoolQ** (+28.9%, 56% parse), ahead of DPO (+22.1%). GRPO with **lr=1e-5** jumps to +21.5% (single) / +19.2% (multi), up from +7.7% / +9.8% at the default lr — the same lr lift seen at 3B.
 
 Scale-up highlights (fair-base N=200, see `RESULTS.md`):
 
 | Model    | Best SNLI-P          | Best SNLI-H          | Best BoolQ           |
 | -------- | -------------------- | -------------------- | -------------------- |
-| 7B       | SimPO +30.5%         | SimPO +29.4%         | SimPO +28.6%         |
-| 14B      | GRPO multi +29.8%    | GRPO multi +14.9%    | SimPO +7.0%          |
-| 3B       | GRPO single +27.7%   | GDPO +15.2%          | GRPO single +10.4%   |
-| Llama 8B | GRPO single +32.5%   | GRPO multi +9.6%     | GDPO +17.3%          |
+| 7B       | SimPO +31.5%         | SimPO +31.1%         | SimPO +28.9%         |
+| 14B      | GRPO multi +30.1%    | GRPO multi +15.1%    | SimPO +7.4%          |
+| 3B       | GRPO single +27.1%   | GDPO +15.1%          | GRPO single +11.0%   |
+| Llama 8B | GRPO single +31.4%   | GRPO multi +8.6%     | GDPO +16.3%          |
 
 
 **Key findings:**
 
-- **SimPO leads both 7B SNLI tasks** (+30.5% Premise, +29.4% Hypothesis) with simple offline training, edging out GRPO multi (+29.1% / +22.6%)
-- **SimPO leads 7B BoolQ on the canonical fair base** (+28.6%, 68% parse), ahead of DPO (+22.1%) — so SimPO is the strongest offline method on all three 7B tasks
-- **GRPO multi is the strongest online method at 14B** (SNLI-P +29.4%, SNLI-H +14.9%) and competitive at 7B SNLI-P (+29.1%)
-- **Llama-8B GRPO single yields the highest single ΔLFR anywhere** (+32.5% SNLI-P); GDPO leads Llama BoolQ (+17.3%)
-- **Llama SNLI-H is the one cell where online RL decisively beats offline**: GRPO multi (+9.6%) and GDPO (+6.9%) clear base comfortably, while every offline method only *marginally* clears it (DPO +0.5%, SimPO +0.7%, SFT +0.6% — best healthy-parse run each). DPO needed a **β-sweep** (β=0.3 vs the default 0.1) to get above base at all — the earlier "offline ceiling" (−0.8% at every β=0.1 checkpoint) was a β artifact, not a fundamental limit. Attributable to weak self-generated preference contrast at this cell's high base LFR (56.4%)
-- **GRPO lr=1e-5 is the key hyperparameter on BoolQ at every scale**: lifts 7B BoolQ GRPO single +7.7%→+21.2% and multi +9.8%→+18.8%, mirroring the same lift at 3B — default lr=1e-6 badly under-trains GRPO on BoolQ
-- **GRPO reward design is scale-dependent**: multi ≥ single at 7B/14B SNLI, but single wins at 3B and on Llama SNLI-P — the optimal reward structure is not universal
-- **3B cannot learn BoolQ CFs from offline pairs**: DPO 1pair ≈ +0% and the stronger 2pair recipe is −0.6%; only online RL (GRPO single +10.4%) works there
-- **Parse rate matters as much as LFR**: high-ΔLFR runs frequently come from parse collapse (the model emits few well-formed edits, and those few flip easily). Charts/tables therefore gate on parse ≥ 15% of base
-- **Metric hygiene**: PPL/NED are reported as medians — the mean PPL is inflated 3–70× by sparse outlier parses (e.g. 7B SNLI-H GRPO g24 mean PPL 9651 vs median 137); NED excludes trivial NED=0 "non-edits"
-- **No general-capability degradation from CF fine-tuning**: across all 72 best adapters, MMLU and ANLI are unchanged vs base (ΔMMLU mean +0.0pp, worst −0.4pp; ΔANLI mean +0.1pp). LoRA CF training does not harm general capability — see `BENCHMARKS.md`
+- **SimPO leads all three 7B tasks** on the canonical fair base (+28.9% BoolQ, +31.5% SNLI-P, +31.1% SNLI-H), ahead of GRPO on SNLI and DPO on BoolQ
+- **GRPO multi is the strongest online method at 14B** (SNLI-P +30.1%, SNLI-H +15.1%) and competitive at 7B SNLI-P (+27.4%)
+- **Llama-8B GRPO single yields the highest single ΔLFR on SNLI-P** (+31.4%); GDPO leads Llama BoolQ (+16.3%)
+- **Llama SNLI-H is the one cell where online RL decisively beats offline**: GRPO multi (+8.6%) clears base comfortably; offline methods are positive but modest (DPO +4.0%, SimPO +3.0%, SFT −1.7%)
+- **GRPO lr=1e-5 is the key hyperparameter on BoolQ at every scale**: lifts 7B BoolQ GRPO single +7.7%→+21.5% and multi +9.8%→+19.2%, mirroring the same lift at 3B
+- **GRPO reward design is scale-dependent**: multi ≥ single at 7B/14B SNLI, but single wins at 3B and on Llama SNLI-P
+- **3B cannot learn BoolQ CFs from offline pairs**: DPO ≈ +0% and the stronger 2pair recipe is +1.7%; only online RL (GRPO single +11.0%) works there
+- **Parse rate matters as much as LFR**: high-ΔLFR runs frequently come from parse collapse. Charts gate on parse ≥ 15% of base
+- **Metric hygiene**: PPL/NED are reported as medians; NED excludes trivial NED=0 "non-edits"
+- **No general-capability degradation from CF fine-tuning**: across all 72 best adapters, MMLU and ANLI are unchanged vs base — see `BENCHMARKS.md`
+- **Fair comparison protocol**: within each model×dataset, base counterfactual verdicts are frozen once and reused across all methods (identical base LFR for every ΔLFR in a cell)
 
-See `RESULTS.md` for complete results, `OVERVIEW.md` for detailed analysis, `BENCHMARKS.md` for MMLU/ANLI, and `PARSE_TAG_ISSUE.md` for the parse/train-without-tags writeup.
+See `RESULTS.md` for complete results, `OVERVIEW.md` for detailed analysis, and `BENCHMARKS.md` for MMLU/ANLI.
 
 ---
 
@@ -295,7 +295,7 @@ All training scripts support `--use_wandb` with `--wandb_run_name`. Dashboard: [
 
 ## Future Work
 
-- **Consistent `<edit>`-tag training targets** — offline methods (DPO/SimPO/SFT) currently train on the bare edited text with the `<edit>…</edit>` wrapper stripped, while the eval parser and online GRPO/GDPO rewards require the tags. This asymmetry is the cause of the Llama offline parse collapses at high LR (see `OVERVIEW.md § Parse-gate exclusions`). Wrapping the offline targets in `<edit>` tags and retraining DPO/SimPO/SFT would remove it — deferred since every featured cell already clears the parse gate
+- **Consistent `<edit>`-tag training targets (targeted retrain)** — offline methods (DPO/SimPO/SFT) currently train on the bare edited text with the `<edit>…</edit>` wrapper stripped, while the eval parser and online GRPO/GDPO rewards require the tags. The **dual-parse diagnostic** (`PARSE_TAG_ISSUE.md §9`) quantified the impact: the **featured matrix is unaffected** (0/12 pick changes), so no global retrain is needed — but the gate wrongly excluded genuinely strong **Llama offline** runs. Planned fix is a **targeted retrain with `<edit>`-wrapped targets** of just **Llama SNLI-H DPO, Llama SNLI-H SimPO, and Llama SNLI-P DPO** (the cells that re-qualify at +6.8 to +9.9% under honest compliance), re-evaluated with the unchanged strict parser
 - **Benchmark evaluation** — ✅ done: MMLU + ANLI across all 76 models (4 base + 72 adapters); no capability degradation (ΔMMLU mean +0.0pp, ΔANLI +0.1pp). See `BENCHMARKS.md`
 - **Parse-rate-aware reporting** — the "best non-degraded run" selection (parse ≥ 15% of base) is documented in `OVERVIEW.md § Parse-gate exclusions`; could be formalized into a combined LFR×parse quality score
 
