@@ -20,6 +20,7 @@ import argparse
 import json
 import math
 import random
+import statistics
 from pathlib import Path
 from typing import Optional
 
@@ -36,6 +37,7 @@ from prompts import get_generation_prompt, get_verification_prompt, format_chat_
 from utils import (
     json_dumps_strict,
     parse_edit_tag,
+    parse_edit_fallback,
     save_json,
     save_jsonl,
     load_jsonl,
@@ -108,6 +110,38 @@ def get_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Path to previous evaluation dir to reuse base model CFs and predictions (for fair A/B comparisons)",
+    )
+    parser.add_argument(
+        "--dual_parse",
+        action="store_true",
+        help=(
+            "Diagnostic mode: keep EVERY generation (no silent drop), score each "
+            "with both the strict <edit>-tag parser and a lenient fallback parser, "
+            "and report format-compliance and diversity as DECOUPLED metrics. "
+            "Leaves the canonical strict path untouched when not set."
+        ),
+    )
+    parser.add_argument(
+        "--fallback_style",
+        type=str,
+        default="plain",
+        choices=["plain", "line"],
+        help="Fallback parser style for --dual_parse (default: plain).",
+    )
+    parser.add_argument(
+        "--store_raw",
+        action="store_true",
+        help="With --dual_parse, also store the raw generation per CF (for eyeballing).",
+    )
+    parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        help=(
+            "Best-effort deterministic verification: fixed seeds + cuDNN "
+            "deterministic + torch.use_deterministic_algorithms(warn_only). "
+            "Reduces cross-run argmax wobble in label verification. Pair with a "
+            "single GPU type for a reproducible, fair LFR."
+        ),
     )
     
     return parser
@@ -402,11 +436,26 @@ def generate_counterfactuals_for_model(
     model_name: str,
     output_dir: Path,
     resume: bool = False,
+    dual_parse: bool = False,
+    fallback_style: str = "plain",
+    store_raw: bool = False,
 ) -> dict[str, list[dict]]:
     """
     Generate counterfactuals for all entries using a model.
     
     Includes deduplication and progressive saving.
+
+    When ``dual_parse`` is False (default), behaviour is unchanged: each attempt
+    is parsed strictly for an <edit> tag and only novel, tag-parsed edits are
+    stored (parse failures and duplicates are dropped silently).
+
+    When ``dual_parse`` is True, EVERY attempt is scored with both the strict
+    tag parser and the lenient fallback parser, and per-entry counters are
+    recorded so that format-compliance (parsed / attempts, incl. duplicates)
+    and diversity (unique / parsed) can be reported as DECOUPLED metrics
+    downstream. The stored ``counterfactuals`` list is deduplicated on the
+    fallback text (a superset of the strict edits); each CF carries a
+    ``parsed_strict`` flag marking whether it ever came from a real tag.
     
     Returns:
         Dictionary mapping dataset_name to list of entry results
@@ -446,6 +495,12 @@ def generate_counterfactuals_for_model(
             
             entry_cfs = []
             seen_texts = set()  # For deduplication
+            # dual-parse per-entry counters (incl. duplicates for compliance)
+            n_attempts = 0
+            n_parsed_strict = 0
+            n_parsed_fallback = 0
+            strict_unique = set()
+            fb_index = {}  # fallback text -> position in entry_cfs
             
             for i in range(cfs_per_entry):
                 target_label = target_labels[i % len(target_labels)]
@@ -458,28 +513,72 @@ def generate_counterfactuals_for_model(
                 messages = format_chat_messages(system_prompt, user_prompt)
                 
                 response = generate_counterfactual(model, tokenizer, messages)
-                edited_text = parse_edit_tag(response)
-                
-                # Deduplication: skip if we've seen this exact text
-                if edited_text is not None and edited_text not in seen_texts:
-                    seen_texts.add(edited_text)
-                    
-                    edit_metrics = compute_edit_distance(original_text, edited_text)
-                    
-                    try:
-                        ppl = compute_perplexity(model, tokenizer, edited_text)
-                    except Exception:
-                        ppl = None
-                    if ppl is not None and not math.isfinite(ppl):
-                        ppl = None
-                    
-                    entry_cfs.append({
-                        "target_label": target_label,
-                        "edited_text": edited_text,
-                        "levenshtein_abs": edit_metrics["levenshtein_abs"],
-                        "levenshtein_norm": edit_metrics["levenshtein_norm"],
-                        "perplexity": ppl,
-                    })
+
+                if not dual_parse:
+                    # ---- canonical strict path (unchanged) ----
+                    edited_text = parse_edit_tag(response)
+                    # Deduplication: skip if we've seen this exact text
+                    if edited_text is not None and edited_text not in seen_texts:
+                        seen_texts.add(edited_text)
+                        
+                        edit_metrics = compute_edit_distance(original_text, edited_text)
+                        
+                        try:
+                            ppl = compute_perplexity(model, tokenizer, edited_text)
+                        except Exception:
+                            ppl = None
+                        if ppl is not None and not math.isfinite(ppl):
+                            ppl = None
+                        
+                        entry_cfs.append({
+                            "target_label": target_label,
+                            "edited_text": edited_text,
+                            "levenshtein_abs": edit_metrics["levenshtein_abs"],
+                            "levenshtein_norm": edit_metrics["levenshtein_norm"],
+                            "perplexity": ppl,
+                        })
+                    continue
+
+                # ---- dual-parse diagnostic path ----
+                n_attempts += 1
+                strict_text = parse_edit_tag(response)
+                fb_text = parse_edit_fallback(response, style=fallback_style)
+
+                if strict_text is not None:
+                    n_parsed_strict += 1
+                    strict_unique.add(strict_text)
+                if fb_text is None:
+                    continue
+                n_parsed_fallback += 1
+                # fallback prefers the tag, so fb_text == strict_text iff tagged
+                is_strict = strict_text is not None and fb_text == strict_text
+
+                if fb_text in fb_index:
+                    # duplicate edit: still counted above; just upgrade its flag
+                    if is_strict:
+                        entry_cfs[fb_index[fb_text]]["parsed_strict"] = True
+                    continue
+
+                edit_metrics = compute_edit_distance(original_text, fb_text)
+                try:
+                    ppl = compute_perplexity(model, tokenizer, fb_text)
+                except Exception:
+                    ppl = None
+                if ppl is not None and not math.isfinite(ppl):
+                    ppl = None
+
+                cf = {
+                    "target_label": target_label,
+                    "edited_text": fb_text,
+                    "levenshtein_abs": edit_metrics["levenshtein_abs"],
+                    "levenshtein_norm": edit_metrics["levenshtein_norm"],
+                    "perplexity": ppl,
+                    "parsed_strict": is_strict,
+                }
+                if store_raw:
+                    cf["raw_response"] = response
+                fb_index[fb_text] = len(entry_cfs)
+                entry_cfs.append(cf)
             
             entry_result = {
                 "idx": entry["idx"],
@@ -488,6 +587,12 @@ def generate_counterfactuals_for_model(
                 "original_text": original_text,
                 "counterfactuals": entry_cfs,
             }
+            if dual_parse:
+                entry_result["n_attempts"] = n_attempts
+                entry_result["n_parsed_strict"] = n_parsed_strict
+                entry_result["n_parsed_fallback"] = n_parsed_fallback
+                entry_result["n_unique_strict"] = len(strict_unique)
+                entry_result["n_unique_fallback"] = len(entry_cfs)
             
             results[dataset_name].append(entry_result)
             
@@ -601,48 +706,100 @@ def add_entry_context(
     return cf_results
 
 
+def _score_cf_subset(cfs: list[dict]) -> dict:
+    """Aggregate LFR / NED / PPL over a list of (already-unique) CF dicts.
+
+    NED and PPL summaries follow the paper convention: NED statistics exclude
+    NED==0 (identical copies), but LFR uses ALL unique CFs as denominator.
+    """
+    total = 0
+    flipped = 0
+    edit_abs = 0.0
+    ned_sum = 0.0
+    ppl_list = []
+    ned_nonzero = []
+    for cf in cfs:
+        if cf.get("edited_text") is None:
+            continue
+        total += 1
+        if cf.get("label_flipped", False):
+            flipped += 1
+        edit_abs += cf.get("levenshtein_abs", 0)
+        nd = cf.get("levenshtein_norm", 0) or 0
+        ned_sum += nd
+        if nd > 0:
+            ned_nonzero.append(nd)
+        p = cf.get("perplexity")
+        if p is not None and isinstance(p, (int, float)) and math.isfinite(p):
+            ppl_list.append(p)
+    lfr = flipped / total if total > 0 else 0
+    ned = ned_sum / total if total > 0 else 0
+    return {
+        "total_cfs": total,
+        "label_flip_rate": lfr,
+        "avg_edit_distance": edit_abs / total if total > 0 else 0,
+        "avg_norm_edit_distance": ned,
+        "avg_perplexity": (sum(ppl_list) / len(ppl_list)) if ppl_list else None,
+        "median_perplexity": statistics.median(ppl_list) if ppl_list else None,
+        "median_norm_edit_distance": statistics.median(ned_nonzero) if ned_nonzero else None,
+        "ppl_valid_count": len(ppl_list),
+        "lfr_per_ned": lfr / ned if ned > 0 else 0,
+    }
+
+
 def compute_metrics(cf_results: dict[str, list[dict]]) -> dict:
-    """Compute summary metrics from CF results."""
+    """Compute summary metrics from CF results.
+
+    For legacy (strict) results the output is unchanged. For dual-parse results
+    (entries carry ``n_attempts``) the top-level keys mirror the STRICT metrics
+    for backward compatibility with the report, and a ``dual`` sub-dict adds the
+    DECOUPLED compliance/diversity plus strict-vs-fallback LFR/NED breakdown.
+    """
     metrics = {}
     
     for dataset_name, entries in cf_results.items():
-        total_cfs = 0
-        flipped_cfs = 0
-        total_edit_dist = 0.0
-        total_norm_edit_dist = 0.0
-        total_ppl = 0.0
-        ppl_count = 0
-        
-        for entry_result in entries:
-            for cf in entry_result["counterfactuals"]:
-                if cf.get("edited_text") is None:
-                    continue
-                
-                total_cfs += 1
-                
-                if cf.get("label_flipped", False):
-                    flipped_cfs += 1
-                
-                total_edit_dist += cf.get("levenshtein_abs", 0)
-                total_norm_edit_dist += cf.get("levenshtein_norm", 0)
-                
-                p = cf.get("perplexity")
-                if p is not None and isinstance(p, (int, float)) and math.isfinite(p):
-                    total_ppl += p
-                    ppl_count += 1
-        
-        lfr = flipped_cfs / total_cfs if total_cfs > 0 else 0
-        ned = total_norm_edit_dist / total_cfs if total_cfs > 0 else 0
+        is_dual = any("n_attempts" in e for e in entries)
 
-        metrics[dataset_name] = {
-            "total_cfs": total_cfs,
-            "label_flip_rate": lfr,
-            "avg_edit_distance": total_edit_dist / total_cfs if total_cfs > 0 else 0,
-            "avg_norm_edit_distance": ned,
-            "avg_perplexity": (total_ppl / ppl_count) if ppl_count > 0 else None,
-            "ppl_valid_count": ppl_count,
-            "lfr_per_ned": lfr / ned if ned > 0 else 0,
+        if not is_dual:
+            metrics[dataset_name] = _score_cf_subset(
+                [cf for e in entries for cf in e["counterfactuals"]]
+            )
+            continue
+
+        # ---- dual-parse: decouple compliance (incl. dups) from diversity ----
+        n_attempts = sum(e.get("n_attempts", 0) for e in entries)
+        n_parsed_strict = sum(e.get("n_parsed_strict", 0) for e in entries)
+        n_parsed_fallback = sum(e.get("n_parsed_fallback", 0) for e in entries)
+
+        all_cfs = [cf for e in entries for cf in e["counterfactuals"]]
+        strict_cfs = [cf for cf in all_cfs if cf.get("parsed_strict")]
+
+        strict_score = _score_cf_subset(strict_cfs)
+        fallback_score = _score_cf_subset(all_cfs)
+
+        n_unique_strict = strict_score["total_cfs"]
+        n_unique_fallback = fallback_score["total_cfs"]
+
+        dual = {
+            "n_attempts": n_attempts,
+            "strict": {
+                **strict_score,
+                "n_parsed": n_parsed_strict,
+                "n_unique": n_unique_strict,
+                "compliance": (n_parsed_strict / n_attempts) if n_attempts else 0,
+                "diversity": (n_unique_strict / n_parsed_strict) if n_parsed_strict else 0,
+            },
+            "fallback": {
+                **fallback_score,
+                "n_parsed": n_parsed_fallback,
+                "n_unique": n_unique_fallback,
+                "compliance": (n_parsed_fallback / n_attempts) if n_attempts else 0,
+                "diversity": (n_unique_fallback / n_parsed_fallback) if n_parsed_fallback else 0,
+            },
         }
+
+        # top-level == strict (keeps generate_report and downstream tooling working)
+        metrics[dataset_name] = {**strict_score, "dual": dual}
     
     return metrics
 
@@ -738,6 +895,20 @@ def main():
     # Set seed
     random.seed(args.seed)
     torch.manual_seed(args.seed)
+
+    if getattr(args, "deterministic", False):
+        import os as _os
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(args.seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        # Required for deterministic cuBLAS GEMMs on CUDA >= 10.2.
+        _os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        try:
+            torch.use_deterministic_algorithms(True, warn_only=True)
+        except Exception as _e:  # older torch without warn_only
+            print(f"  [deterministic] use_deterministic_algorithms unavailable: {_e}")
+        print("  Deterministic mode ENABLED (fixed seeds, cuDNN deterministic).")
     
     print("=" * 60)
     print("Model Evaluation: Base vs Fine-Tuned")
@@ -776,6 +947,7 @@ def main():
     base_model, tokenizer = load_base_model(args.base_model, Config.MODEL_CACHE_DIR)
     
     # Check if we should reuse base evaluation from previous run
+    base_is_prefrozen = False  # True iff the anchor supplies frozen base verdicts
     if args.base_eval_dir:
         base_eval_path = Path(args.base_eval_dir)
         print("\n" + "=" * 60)
@@ -801,7 +973,19 @@ def main():
         if not base_cfs_file.exists():
             raise FileNotFoundError(f"base_cfs_progress.jsonl not found in {args.base_eval_dir}")
         
-        existing_base_cfs = load_jsonl(str(base_cfs_file))
+        # Prefer FROZEN base verdicts when the anchor has them, so base LFR is
+        # reproducible across evals. Base-CF verification (Step 4) is otherwise
+        # re-run every eval and is nondeterministic -> ~1-2pp base-LFR wobble,
+        # which makes cross-method ΔLFR comparisons unfair. base_cfs_verified.jsonl
+        # is written the first time an anchor is verified (see Step 4 below).
+        base_verified_file = base_eval_path / "base_cfs_verified.jsonl"
+        if base_verified_file.exists():
+            existing_base_cfs = load_jsonl(str(base_verified_file))
+            base_is_prefrozen = True
+            print(f"  Loaded FROZEN base verdicts from {base_verified_file.name}")
+        else:
+            existing_base_cfs = load_jsonl(str(base_cfs_file))
+            print("  No frozen base verdicts yet — will verify base once and freeze them")
         base_cf_results = {}
         for entry_result in existing_base_cfs:
             ds_name = entry_result["dataset_name"]
@@ -843,6 +1027,9 @@ def main():
             model_name="base",
             output_dir=output_dir,
             resume=args.resume,
+            dual_parse=args.dual_parse,
+            fallback_style=args.fallback_style,
+            store_raw=args.store_raw,
         )
     
     # Step 3: Generate CFs with fine-tuned model
@@ -859,6 +1046,9 @@ def main():
         model_name="tuned",
         output_dir=output_dir,
         resume=args.resume,
+        dual_parse=args.dual_parse,
+        fallback_style=args.fallback_style,
+        store_raw=args.store_raw,
     )
     
     del tuned_model
@@ -873,14 +1063,30 @@ def main():
     print("Step 4: Verifying all CFs with BASE model as judge...")
     print("=" * 60)
     
-    base_cf_results = verify_counterfactuals_with_base_model(
-        base_model=base_model,
-        tokenizer=tokenizer,
-        cf_results=base_cf_results,
-        original_predictions=original_predictions,
-        output_dir=output_dir,
-        model_source="base",
-    )
+    if base_is_prefrozen:
+        print(
+            "Using FROZEN base verdicts from anchor — skipping base re-verification "
+            "(reproducible base LFR)."
+        )
+    else:
+        base_cf_results = verify_counterfactuals_with_base_model(
+            base_model=base_model,
+            tokenizer=tokenizer,
+            cf_results=base_cf_results,
+            original_predictions=original_predictions,
+            output_dir=output_dir,
+            model_source="base",
+        )
+        # Freeze verdicts so every future eval reusing this anchor gets an
+        # identical (reproducible) base LFR. Persist to this output dir, and —
+        # when reusing an anchor that lacks them — back to the anchor itself.
+        _verified_rows = [e for entries in base_cf_results.values() for e in entries]
+        save_jsonl(_verified_rows, str(output_dir / "base_cfs_verified.jsonl"))
+        if args.base_eval_dir:
+            _anchor_frozen = Path(args.base_eval_dir) / "base_cfs_verified.jsonl"
+            if not _anchor_frozen.exists():
+                save_jsonl(_verified_rows, str(_anchor_frozen))
+                print(f"  Wrote frozen base verdicts to anchor: {_anchor_frozen}")
     
     tuned_cf_results = verify_counterfactuals_with_base_model(
         base_model=base_model,
@@ -909,6 +1115,8 @@ def main():
             "num_samples": args.num_samples,
             "cfs_per_entry": args.cfs_per_entry,
             "seed": args.seed,
+            "dual_parse": args.dual_parse,
+            "fallback_style": args.fallback_style if args.dual_parse else None,
         },
         "evaluation_approach": {
             "lfr_definition": "% where BASE model prediction changed from original",

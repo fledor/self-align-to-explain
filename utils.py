@@ -155,6 +155,73 @@ def parse_all_edit_tags(response: str) -> list[str]:
     return [m.strip() for m in matches if m.strip()]
 
 
+# Preamble labels the model sometimes emits instead of an <edit> tag, e.g.
+# "Edited premise: ...". Used only by the lenient fallback parser below.
+_FALLBACK_PREAMBLE_RE = re.compile(
+    r"^\s*(?:edited\s+)?(?:premise|hypothesis|passage|sentence|text|answer|output)\s*:\s*",
+    re.IGNORECASE,
+)
+
+
+def parse_edit_fallback(response: str, style: str = "plain") -> Optional[str]:
+    """
+    Lenient edit extractor that PREFERS the <edit> tag but falls back to the
+    bare completion when no tag is present.
+
+    This exists purely for the dual-parse diagnostic: offline methods (DPO/SFT/
+    SimPO) are trained on bare edited text without <edit> tags, so a strict,
+    tag-only parser (:func:`parse_edit_tag`) understates their format compliance.
+    Comparing strict vs. fallback on the SAME generations isolates the pure
+    tag effect from sampling noise.
+
+    Args:
+        response: The model's raw response string.
+        style:
+            "plain" -- if no tag, return the whole stripped completion
+                (surrounding quotes/backticks stripped). Most transparent;
+                accepts some noise verbatim so NED/PPL/LFR reflect reality.
+            "line"  -- if no tag, strip a leading "Edited premise:"-style
+                preamble and, when the remainder is multi-line, keep the first
+                non-empty line. Slightly cleaner, still tag-free.
+
+    Returns:
+        The extracted edit, or None if nothing usable (empty) was found.
+    """
+    # 1) Prefer a real <edit> tag: identical to strict when a tag exists.
+    tagged = parse_edit_tag(response)
+    if tagged is not None:
+        return tagged
+
+    # 2) No tag -> fall back to the bare completion.
+    s = (response or "").strip()
+    if not s:
+        return None
+
+    def _strip_wrappers(t: str) -> str:
+        t = t.strip()
+        # strip matched surrounding quotes/backticks (single layer)
+        for q in ('"', "'", "`"):
+            if len(t) >= 2 and t[0] == q and t[-1] == q:
+                t = t[1:-1].strip()
+                break
+        return t
+
+    if style == "plain":
+        return _strip_wrappers(s) or None
+
+    if style == "line":
+        # drop a leading "Edited premise:"-style label if present
+        s2 = _FALLBACK_PREAMBLE_RE.sub("", s, count=1).strip()
+        lines = [ln.strip() for ln in s2.splitlines() if ln.strip()]
+        if not lines:
+            return None
+        # single line if multi-line, else the whole thing
+        cand = lines[0] if len(lines) > 1 else s2
+        return _strip_wrappers(cand) or None
+
+    raise ValueError(f"Unknown fallback style: {style!r}")
+
+
 def parse_confidence(response: str) -> Optional[float]:
     """
     Extract confidence score from model response.
