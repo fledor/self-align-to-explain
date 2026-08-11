@@ -1,22 +1,20 @@
 # Self-Align to Explain
 ### Comparing Post-Training Methods for Counterfactual Generation
 
-Code and results for the thesis *Self-Align to Explain*, which compares post-training
-self-alignment methods — **SFT, DPO, SimPO, GRPO, and GDPO** — on their ability to turn
-an instruction-tuned LLM into a generator of **minimal, label-flipping counterfactuals**
-for text classification.
+Code and results for the thesis *Self-Align to Explain*. It compares five post-training
+methods (**SFT, DPO, SimPO, GRPO, GDPO**) for fine-tuning an instruction-tuned LLM to
+generate **minimal, label-flipping counterfactuals** for text classification.
 
-Given an input the model classifies as label *A*, the task is to produce a minimal edit
-that makes the same model predict a different label *B*. Each model judges its own
-counterfactuals: a flip is measured against the base model's prediction, not the ground
-truth. We evaluate label flip rate (LFR), normalized edit distance (NED), and perplexity
-(PPL) on three tasks — **BoolQ** (edit the passage to flip a yes/no answer),
-**SNLI-Premise**, and **SNLI-Hypothesis** (edit one side to change the NLI relation) —
-across four base models: **Qwen2.5-3B/7B/14B-Instruct** and **Llama-3.1-8B-Instruct**
-(cross-architecture check). All methods fine-tune with QLoRA (4-bit NF4, LoRA r=32,
-α=16); learning rate and a small set of method hyperparameters are tuned per
-model×dataset cell — the exact winning configuration for every cell is in
-[`BEST_CONFIGS.md`](BEST_CONFIGS.md).
+The task: given an input the model classifies as label *A*, produce a minimal edit that
+makes the same model predict a different label *B*. Each model judges its own
+counterfactuals, so a flip is measured against the base model's prediction, not the
+ground truth. Metrics are label flip rate (LFR), normalized edit distance (NED), and
+perplexity (PPL). Tasks: **BoolQ** (edit the passage to flip a yes/no answer),
+**SNLI-Premise** and **SNLI-Hypothesis** (edit one side to change the NLI relation).
+Base models: **Qwen2.5-3B/7B/14B-Instruct** and **Llama-3.1-8B-Instruct**. All methods
+train QLoRA adapters (4-bit NF4, LoRA r=32, α=16). Learning rate and a few method
+hyperparameters are tuned per model×dataset cell; the winning configuration for each
+cell is in [`BEST_CONFIGS.md`](BEST_CONFIGS.md).
 
 | Method    | Type      | Description                                                                          |
 | --------- | --------- | ------------------------------------------------------------------------------------ |
@@ -108,9 +106,9 @@ produces are in `qualitative_cf_examples_7b_*.md`.
 **GRPO / GDPO** skip data pre-generation — generation + reward + learning happen within each training step:
 
 ```
-┌─────────────┐    ┌──────────────────────────────────────────────────────┐    ┌─────────────┐
-│   Dataset   │ ─▶ │  Train (generate + reward + learn per step)         │ ─▶ │   Compare   │
-└─────────────┘    └──────────────────────────────────────────────────────┘    └─────────────┘
+┌─────────────┐    ┌──────────────────────────────────────────────┐    ┌─────────────┐
+│   Dataset   │ ─▶ │  Train (generate + reward + learn per step)  │ ─▶ │   Compare   │
+└─────────────┘    └──────────────────────────────────────────────┘    └─────────────┘
 ```
 
 ---
