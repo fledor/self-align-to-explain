@@ -1,72 +1,97 @@
 # Self-Align to Explain
 ### Comparing Post-Training Methods for Counterfactual Generation
 
-This thesis compares post-training self-alignment methods — SFT, DPO, SimPO, GRPO, and GDPO — for counterfactual example generation. We evaluate each method's ability to produce minimal, fluent edits that flip classifier predictions, measuring label flip rate, edit distance, and perplexity.
+Code and results for the thesis *Self-Align to Explain*, which compares post-training
+self-alignment methods — **SFT, DPO, SimPO, GRPO, and GDPO** — on their ability to turn
+an instruction-tuned LLM into a generator of **minimal, label-flipping counterfactuals**
+for text classification.
 
----
+Given an input the model classifies as label *A*, the task is to produce a minimal edit
+that makes the same model predict a different label *B*. Each model judges its own
+counterfactuals: a flip is measured against the base model's prediction, not the ground
+truth. We evaluate label flip rate (LFR), normalized edit distance (NED), and perplexity
+(PPL) on three tasks — **BoolQ** (edit the passage to flip a yes/no answer),
+**SNLI-Premise**, and **SNLI-Hypothesis** (edit one side to change the NLI relation) —
+across four base models: **Qwen2.5-3B/7B/14B-Instruct** and **Llama-3.1-8B-Instruct**
+(cross-architecture check). All methods fine-tune with QLoRA (4-bit NF4, LoRA r=32,
+α=16); learning rate and a small set of method hyperparameters are tuned per
+model×dataset cell — the exact winning configuration for every cell is in
+[`BEST_CONFIGS.md`](BEST_CONFIGS.md).
 
-## Research Goal
-
-This project investigates how different post-training methods affect a language model's ability to generate **minimal, label-flipping counterfactuals** for text classification tasks. All methods fine-tune **Qwen/Qwen2.5-7B-Instruct** (primary) with QLoRA (4-bit, LoRA r=32, alpha=16, lr=5e-6) on three datasets: **BoolQ** (edit passage to flip yes/no answer), **SNLI-Premise** and **SNLI-Hypothesis** (edit premise/hypothesis to change NLI relationship). Scale-ups to **Qwen2.5-14B-Instruct**, **Qwen2.5-3B-Instruct**, and **Llama-3.1-8B-Instruct** (cross-architecture) use the same recipe.
-
-
-| Method    | Type      | Description                                                                         |
-| --------- | --------- | ----------------------------------------------------------------------------------- |
-| **SFT**   | Offline   | Supervised Fine-Tuning on successful counterfactuals only                           |
-| **DPO**   | Offline   | Direct Preference Optimization on pre-generated preference pairs                    |
-| **SimPO** | Offline   | Simple Preference Optimization — reference-free CPO variant with length normalization and margin γ |
-| **GRPO**  | Online RL | Group Relative Policy Optimization with reward-driven generation during training    |
-| **GDPO**  | Online RL | Group reward-Decoupled normalization Policy Optimization (per-reward normalization) |
-
+| Method    | Type      | Description                                                                          |
+| --------- | --------- | ------------------------------------------------------------------------------------ |
+| **SFT**   | Offline   | Supervised fine-tuning on successful counterfactuals only                            |
+| **DPO**   | Offline   | Direct Preference Optimization on pre-generated preference pairs                     |
+| **SimPO** | Offline   | Reference-free preference optimization with length normalization and margin γ        |
+| **GRPO**  | Online RL | Group Relative Policy Optimization with reward-driven generation during training     |
+| **GDPO**  | Online RL | GRPO variant with per-reward (decoupled) group normalization for multi-reward setups |
 
 ---
 
 ## Results
 
-Best ΔLFR (label flip rate improvement over base model) per method, using fair-base N=200 evaluation on **Qwen2.5-7B-Instruct**. Each cell is the best run with **parse rate ≥ 15% of base** (parse-collapse artifacts excluded). NED is reported as the median over non-trivial edits (NED>0) and PPL as the median:
+ΔLFR (label-flip-rate improvement over the same model's base, in percentage points) for
+the best parse-gated run per cell; fair frozen-base evaluation, N=200 prompts × 10
+counterfactuals. GRPO shows whichever reward construction (composite or decomposed) wins
+the cell. Bold = best method in the cell. Full metrics per run: `frozen_metrics.json`
+and `results_charts.html`.
 
-
-| Method              | BoolQ       | SNLI-Premise | SNLI-Hypothesis |
-| ------------------- | ----------- | ------------ | --------------- |
-| **DPO**             | +22.1%      | +24.5%       | +23.2%          |
-| SimPO               | **+28.9%**  | **+31.5%**   | **+31.1%**      |
-| SFT                 | +9.4%       | +0.4%        | +1.8%           |
-| GRPO (best variant) | +21.5%      | +27.4%       | +20.7%          |
-| GDPO v6 (best ckpt) | −0.2%       | +16.5%       | +17.7%          |
-
-On the canonical fair base, **SimPO leads 7B BoolQ** (+28.9%, 56% parse), ahead of DPO (+22.1%). GRPO with **lr=1e-5** jumps to +21.5% (single) / +19.2% (multi), up from +7.7% / +9.8% at the default lr — the same lr lift seen at 3B.
-
-Scale-up highlights (fair-base N=200, see `RESULTS.md`):
-
-| Model    | Best SNLI-P          | Best SNLI-H          | Best BoolQ           |
-| -------- | -------------------- | -------------------- | -------------------- |
-| 7B       | SimPO +31.5%         | SimPO +31.1%         | SimPO +28.9%         |
-| 14B      | GRPO multi +30.1%    | GRPO multi +15.1%    | SimPO +7.4%          |
-| 3B       | GRPO single +27.1%   | GDPO +15.1%          | GRPO single +11.0%   |
-| Llama 8B | GRPO single +31.4%   | GRPO multi +8.6%     | GDPO +16.3%          |
-
+| Model | Method | BoolQ | SNLI-Premise | SNLI-Hypothesis |
+| --- | --- | --- | --- | --- |
+| 3B | SFT | +1.2% | +4.4% | +3.1% |
+|  | DPO | +1.7% | +11.0% | +7.3% |
+|  | SimPO | +7.5% | +25.8% | +6.7% |
+|  | GRPO | **+11.0%** | **+27.1%** | +8.2% |
+|  | GDPO | +1.3% | +17.7% | **+15.1%** |
+| 7B | SFT | +9.4% | +0.4% | +1.8% |
+|  | DPO | +22.1% | +24.5% | +23.2% |
+|  | SimPO | **+28.9%** | **+31.5%** | **+31.1%** |
+|  | GRPO | +21.5% | +27.4% | +22.1% |
+|  | GDPO | −0.2% | +16.5% | +17.7% |
+| 14B | SFT | +0.5% | +0.0% | +3.8% |
+|  | DPO | +2.7% | +15.5% | +6.7% |
+|  | SimPO | **+7.4%** | +22.3% | +13.7% |
+|  | GRPO | +2.5% | **+30.1%** | **+15.1%** |
+|  | GDPO | +5.7% | +26.5% | +8.7% |
+| Llama-8B | SFT | −0.9% | +1.9% | −1.7% |
+|  | DPO | +11.5% | +2.4% | +4.0% |
+|  | SimPO | +9.0% | +19.0% | +3.0% |
+|  | GRPO | +12.5% | **+31.4%** | **+8.6%** |
+|  | GDPO | **+16.3%** | +11.2% | +6.0% |
 
 **Key findings:**
 
-- **SimPO leads all three 7B tasks** on the canonical fair base (+28.9% BoolQ, +31.5% SNLI-P, +31.1% SNLI-H), ahead of GRPO on SNLI and DPO on BoolQ
-- **GRPO multi is the strongest online method at 14B** (SNLI-P +30.1%, SNLI-H +15.1%) and competitive at 7B SNLI-P (+27.4%)
-- **Llama-8B GRPO single yields the highest single ΔLFR on SNLI-P** (+31.4%); GDPO leads Llama BoolQ (+16.3%)
-- **Llama SNLI-H is the one cell where online RL decisively beats offline**: GRPO multi (+8.6%) clears base comfortably; offline methods are positive but modest (DPO +4.0%, SimPO +3.0%, SFT −1.7%)
-- **GRPO lr=1e-5 is the key hyperparameter on BoolQ at every scale**: lifts 7B BoolQ GRPO single +7.7%→+21.5% and multi +9.8%→+19.2%, mirroring the same lift at 3B
-- **GRPO reward design is scale-dependent**: multi ≥ single at 7B/14B SNLI, but single wins at 3B and on Llama SNLI-P
-- **3B cannot learn BoolQ CFs from offline pairs**: DPO ≈ +0% and the stronger 2pair recipe is +1.7%; only online RL (GRPO single +11.0%) works there
-- **Parse rate matters as much as LFR**: high-ΔLFR runs frequently come from parse collapse. Charts gate on parse ≥ 15% of base
-- **Metric hygiene**: PPL/NED are reported as medians; NED excludes trivial NED=0 "non-edits"
-- **No general-capability degradation from CF fine-tuning**: across all 72 best adapters, MMLU and ANLI are unchanged vs base — see `BENCHMARKS.md`
-- **Fair comparison protocol**: within each model×dataset, base counterfactual verdicts are frozen once and reused across all methods (identical base LFR for every ΔLFR in a cell)
+- **There is no universal winner.** The best method changes with model and task, and
+  per-cell 95% bootstrap confidence intervals (median half-width ±3.7 pp) overlap the
+  runner-up in 11 of 12 cells, so individual cell wins should be read as ties.
+- **GRPO is the most consistent method.** It has the best average rank across the 12
+  cells, is statistically indistinguishable from the cell's best method everywhere, and
+  is the only method whose confidence interval clears zero in all 12 cells.
+- **Offline dominance is a 7B phenomenon.** SimPO sweeps all three 7B tasks, but away
+  from 7B the online methods win 8 of 9 cells. SFT is consistently weak and is the only
+  method the rank-based tests separate from the rest.
+- **Tuning often outweighs the objective.** Learning rate swings GRPO on BoolQ from
+  ~+8–10% to +21.5% at 7B (and similarly at 3B), only a higher rate lifts DPO above base
+  at 14B and on Llama, the SimPO margin is decisive at 3B, and online runs peak at
+  0.25–0.75 epochs and are early-stopped by checkpoint sweep. The winning configuration
+  per cell is recorded in [`BEST_CONFIGS.md`](BEST_CONFIGS.md).
+- **Metric hygiene matters.** High-ΔLFR runs can be parse-collapse artifacts, so featured
+  runs must retain a parse rate ≥ 15% of base; NED is the median over genuine edits
+  (NED > 0) and PPL the median; base verdicts are frozen so every method in a cell is
+  compared against the identical base LFR.
+- **Counterfactual fine-tuning costs no general capability.** Across all 72 released
+  adapters, MMLU stays within ±0.4 pp and ANLI within +1.2/−0.7 pp of base — see
+  [`BENCHMARKS.md`](BENCHMARKS.md).
 
-See `RESULTS.md` for complete results, `OVERVIEW.md` for detailed analysis, and `BENCHMARKS.md` for MMLU/ANLI.
+Per-run metrics for all featured runs are in `frozen_metrics.json`/`.tsv` and the
+interactive `results_charts.html`; qualitative examples of the edits each method
+produces are in `qualitative_cf_examples_7b_*.md`.
 
 ---
 
 ## Pipeline Overview
 
-**DPO / SimPO / SFT / KTO** use pre-generated training data:
+**SFT / DPO / SimPO** use pre-generated training data:
 
 ```
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
@@ -92,188 +117,154 @@ See `RESULTS.md` for complete results, `OVERVIEW.md` for detailed analysis, and 
 
 ## Usage
 
-### Stage 1-3: Generate Training Data (DPO/SimPO/SFT/KTO only)
+The exact command behind every featured run is in [`BEST_CONFIGS.md`](BEST_CONFIGS.md);
+the commands below show the shape of each stage.
+
+**Stages 1–3 — generate training data** (offline methods only):
 
 ```bash
-# Generate counterfactuals
 python generate_counterfactuals.py \
     --datasets boolq snli_premise snli_hypothesis \
     --max_entries 2000 --cfs_per_entry 40 \
     --output_dir ./results/counterfactuals_2000e40c --resume
 
-# Evaluate counterfactuals (label flip, confidence, similarity)
 python evaluate_counterfactuals.py \
     --datasets boolq --input_dir ./results/counterfactuals_2000e40c \
     --output_dir ./results/counterfactuals_2000e40c --resume
 
-# Construct preference pairs
 python construct_dpo_pairs.py \
     --datasets boolq --input_dir ./results/counterfactuals_2000e40c \
     --output_dir ./results/dpo_pairs_boolq --max_pairs 2
 ```
 
-Supports parallel execution via `--start_idx`, `--end_idx`, `--shard_id` for large-scale runs.
+Stages 1–2 support sharded parallel execution (`--start_idx`, `--end_idx`, `--shard_id`).
+Data is generated per base model, since each model learns from its own counterfactuals.
 
-### Stage 4: Train
-
-**DPO:**
-
-```bash
-python train_dpo.py \
-    --dataset_path ./results/dpo_pairs_boolq/dpo_training.jsonl \
-    --output_dir ./results/dpo_model_boolq_1pair_b4_2ep \
-    --num_train_epochs 2 --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
-    --use_4bit --bf16 --gradient_checkpointing \
-    --use_wandb --wandb_run_name "dpo-boolq-1p-b4-2ep"
-```
-
-**SimPO** (reference-free; requires `beta` and `simpo_gamma`):
+**Stage 4 — train:**
 
 ```bash
 python train_dpo.py \
     --dataset_path ./results/dpo_pairs_boolq/dpo_training.jsonl \
-    --output_dir ./results/simpo_model_boolq \
-    --loss_type simpo --beta 3.0 --simpo_gamma 0.5 \
+    --output_dir ./results/dpo_model_boolq \
     --num_train_epochs 2 --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
     --use_4bit --bf16 --gradient_checkpointing
 ```
 
-**SFT** (uses "chosen" column only; overfits quickly, ~0.2-0.5 epochs recommended):
+- **SimPO**: same script with `--loss_type simpo --beta 3.0 --simpo_gamma 0.5` (reference-free).
+- **SFT**: `train_sft.py` on the same data (uses the *chosen* column only; overfits
+  quickly — the featured runs stop after ~200 steps).
+- **GRPO**: `train_grpo.py --dataset_name boolq --num_generations 16` — online, no
+  pre-generated data; `--multi_reward` selects the decomposed reward (flip, similarity,
+  flip-gated confidence, format) instead of the composite one.
+- **GDPO**: `train_gdpo.py` — decomposed rewards with per-reward group normalization;
+  featured configuration uses `--generation_batch_size 128 --conditioned_rewards
+  --beta 0.0005 --epsilon_high 0.28`.
 
-```bash
-python train_sft.py \
-    --dataset_path ./results/dpo_pairs_boolq/dpo_training.jsonl \
-    --output_dir ./results/sft_model_boolq \
-    --num_train_epochs 0.5 --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
-    --use_4bit --bf16 --gradient_checkpointing
-```
-
-**GRPO** (online RL — generates counterfactuals during training):
-
-```bash
-python train_grpo.py \
-    --dataset_name boolq --max_entries 2000 \
-    --output_dir ./results/grpo_model_boolq_1ep_g16 \
-    --num_train_epochs 1 --per_device_train_batch_size 1 --gradient_accumulation_steps 4 \
-    --num_generations 16 --max_completion_length 512 --temperature 1.2 \
-    --multi_reward \
-    --use_4bit --bf16 --gradient_checkpointing
-```
-
-Three reward configurations: **single v2** (default, composite `flip + confidence * sim`), **multi-reward v2** (`--multi_reward`, four decomposed rewards with gated confidence and format reward), and multi-reward v1 (historical, collapsed). Additional flags for fair comparison with GDPO: `--conditioned_rewards`, `--epsilon_high 0.28`, `--beta 0.0005`.
-
-**GDPO** (per-reward normalization — extends GRPO for multi-reward settings):
-
-```bash
-python train_gdpo.py \
-    --dataset_name snli_premise --max_entries 2000 \
-    --output_dir ./results/gdpo_model_snli_premise_v6 \
-    --num_train_epochs 1 --per_device_train_batch_size 8 --gradient_accumulation_steps 1 \
-    --num_generations 16 --generation_batch_size 128 --max_completion_length 512 \
-    --learning_rate 5e-6 --beta 0.0005 --epsilon_high 0.28 --conditioned_rewards \
-    --use_4bit --bf16 --gradient_checkpointing
-```
-
-Best config (v6): `generation_batch_size=128` (8 groups for meaningful batch normalization), `--conditioned_rewards` (similarity gated on flip), `--beta 0.0005` (KL penalty), `--epsilon_high 0.28` (DAPO asymmetric clipping). See `OVERVIEW.md` section 5 for the full GDPO analysis.
-
-**Orchestrated pipelines** (recommended for full runs):
-
-```bash
-# 7B / 14B: full pipeline (generate → build pairs → train → eval)
-MODEL=Qwen/Qwen2.5-14B-Instruct TAG=qwen25_14b ./submit_model_pipeline.sh
-
-# 3B: equivalent pipeline
-./submit_3b_pipeline.sh
-
-# Llama 3.1 8B: cross-architecture pipeline
-./submit_llama8b_pipeline.sh
-
-# Post-hoc fair eval for any adapter
-ADAPTER_DIR=results/my_model DATASET=boolq ./run_eval_14b_fair.sh
-ADAPTER_DIR=results/my_model DATASET=boolq ./run_eval_3b_fair.sh
-ADAPTER_DIR=results/my_model DATASET=boolq ./run_eval_llama8b_fair.sh
-```
-
-### Stage 5: Evaluate
+**Stage 5 — evaluate:**
 
 ```bash
 python evaluate_models.py \
-    --model_path ./results/dpo_model_boolq_1pair_b4_2ep \
+    --model_path ./results/dpo_model_boolq \
     --datasets boolq --split validation \
     --num_samples 200 --cfs_per_entry 10 \
-    --output_dir ./results/dpo_model_boolq_1pair_b4_2ep/eval_boolq_200 \
+    --output_dir ./results/dpo_model_boolq/eval_boolq_200 \
     --base_eval_dir ./results/base_eval_boolq_200 --resume
 ```
 
-Compares base model vs fine-tuned model on **label flip rate** (LFR), **normalized edit distance** (NED), and **perplexity** (PPL). The base model judges all counterfactuals. Use `--base_eval_dir` to reuse base model CFs for fair A/B comparison across configs.
+Compares base vs fine-tuned model on LFR, NED, and PPL. `--base_eval_dir` reuses the
+base model's counterfactuals and frozen verdicts, so every adapter of a model×dataset
+cell is scored against the identical base.
 
 ---
 
 ## Design Choices
 
-### Preference Pair Construction
+### Preference pairs (offline methods)
 
-We use **1-to-1 pairing** with hard weighting to create maximum-contrast preference pairs:
+Counterfactuals are ranked by a unified score with validity strictly first:
 
 ```
-Unified Score = flip_bonus + (confidence × similarity)
-where flip_bonus = 100 if label flipped, 0 otherwise
+score = flip_bonus + (confidence × similarity)     flip_bonus = 100 if label flipped else 0
 ```
 
-Chosen pool: only label-flipping CFs (sorted best-first). Rejected pool: all valid CFs (sorted worst-first). Pairs are formed 1-to-1: best chosen ↔ worst rejected, 2nd-best ↔ 2nd-worst. This ensures each pair has maximum contrast. DPO/SimPO use both columns; SFT and KTO use only the chosen column.
+The *chosen* pool holds only label-flipping CFs (best-first); the *rejected* pool holds
+all well-formed CFs (worst-first). Pairs are formed by matching ranks from opposite ends
+— best chosen with worst rejected — which maximizes contrast, and the rejected member
+must target the same label as the chosen one. Up to two pairs per entry are built; one
+vs two pairs is a tuned setting. DPO/SimPO use both columns, SFT the chosen column only.
 
-### Generation Diversity
+### Rewards (online methods)
 
-High-temperature sampling (T=1.2, top_p=0.99, top_k=100) with unique random seeds per generation and post-generation deduplication. CFs must have valid `<edit>...</edit>` tags; invalid responses are discarded.
+The **composite** reward collapses the same signals into one scalar,
+`r = 1[flip] + confidence × similarity`. The **decomposed** reward keeps four signals
+separate — flip, similarity, flip-gated confidence, and a format reward for well-formed
+`<edit>` tags — combined with equal weights. GDPO normalizes each reward within the
+group before combining (its only difference from GRPO), and its featured configuration
+adds a small KL penalty (β=0.0005), DAPO asymmetric clipping (ε_high=0.28), and a
+generation batch of eight groups so per-reward statistics are meaningful.
 
-### Evaluation
+### Generation and evaluation protocol
 
-- **Fair-base comparison**: base model CFs generated once, reused across all model evaluations via `--base_eval_dir`
-- **LFR**: measured against the base model's own prediction on the original input (not ground truth)
-- **Hardware caveat**: bf16 inference varies 2-5pp across GPU types; run comparisons on the same node
+- Generation (training data and eval): temperature 1.2, top-p 0.99, top-k 100, unique
+  seed per sample, post-generation deduplication; edits must be wrapped in
+  `<edit>...</edit>` tags.
+- **Frozen fair base**: base CFs are generated once per model×dataset and their verdicts
+  frozen, so base LFR is identical for every method in a cell.
+- **LFR** is measured against the base model's own prediction on the original input, not
+  the ground-truth label.
+- **Parse gate**: featured runs need a parse rate ≥ 15% of base (collapse screen).
+- **Medians**: NED over non-trivial edits (NED > 0); PPL as median.
+- Hardware caveat: bf16 inference varies 2–5 pp across GPU types; comparisons should run
+  on the same node.
+
+---
+
+## Released Adapters
+
+The best adapter for each of the 72 model×dataset×method cells is released on Hugging
+Face: [`fledor/self-align-to-explain-adapters`](https://huggingface.co/fledor/self-align-to-explain-adapters).
+Each subfolder (`<base>_<dataset>_<method>`, e.g. `qwen7b_snli_premise_simpo`) contains
+the LoRA adapter, tokenizer, training config, and evaluation metrics; adapters load on
+top of their stock base model:
+
+```python
+from peft import PeftModel
+from transformers import AutoModelForCausalLM
+
+base = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B-Instruct", torch_dtype="bfloat16")
+model = PeftModel.from_pretrained(base, "fledor/self-align-to-explain-adapters",
+                                  subfolder="qwen7b_snli_premise_simpo")
+```
 
 ---
 
 ## Project Structure
 
 ```
-cfg-dpo/
+self-align-to-explain/
 ├── config.py                      # Central configuration
 ├── dataset_registry.py            # Dataset registry (extensible)
-├── prompts.py                     # Prompt templates
+├── prompts.py                     # Prompt templates (verbatim, as used in the thesis)
 ├── utils.py                       # Shared utilities
 │
 ├── generate_counterfactuals.py    # Stage 1: Generate CFs
 ├── evaluate_counterfactuals.py    # Stage 2: Evaluate CFs
 ├── construct_dpo_pairs.py         # Stage 3: Build training data
-│
-├── train_dpo.py                   # Stage 4: DPO / SimPO training (also supports KTO via --loss_type kto)
+├── train_dpo.py                   # Stage 4: DPO / SimPO training
 ├── train_sft.py                   # Stage 4: SFT training
 ├── train_grpo.py                  # Stage 4: GRPO (+ reward functions)
 ├── train_gdpo.py                  # Stage 4: GDPO (per-reward normalization)
 ├── gdpo_trainer.py                # GDPOTrainer subclass
+├── evaluate_models.py             # Stage 5: Model comparison (frozen fair base)
 │
-├── evaluate_models.py             # Stage 5: Model comparison
-│
-├── submit_model_pipeline.sh       # Orchestrate full pipeline (7B/14B)
-├── submit_3b_pipeline.sh          # Orchestrate full pipeline (3B)
-├── run_dpo_sweep.sh               # DPO / SimPO / KTO Slurm job
-├── run_grpo.sh                    # GRPO Slurm job
-├── run_gdpo.sh                    # GDPO Slurm job
-├── run_sft_train_only.sh          # SFT training Slurm job (no inline eval)
-├── run_eval_14b_fair.sh           # Fair eval for any 14B adapter
-├── run_eval_3b_fair.sh            # Fair eval for any 3B adapter
-├── submit_llama8b_pipeline.sh     # Orchestrate full pipeline (Llama 8B)
-├── run_eval_llama8b_fair.sh       # Fair eval for any Llama 8B adapter
-│
-├── RESULTS.md                     # Full evaluation results
-├── OVERVIEW.md                    # Detailed method analysis
+├── BEST_CONFIGS.md                # Exact winning configuration per cell (72 runs)
+├── frozen_metrics.json / .tsv     # Frozen fair-eval metrics behind all tables
+├── BENCHMARKS.md                  # MMLU / ANLI capability check
 ├── results_charts.html            # Interactive results visualization
+├── qualitative_cf_examples_7b_*.md# Qualitative counterfactual examples
 │
-├── data/                          # Downloaded datasets (tracked)
-├── results/                       # Output files (gitignored)
-├── logs/                          # SLURM logs (gitignored)
-└── model_cache/                   # Cached weights (gitignored)
+├── data/                          # Datasets (tracked)
+└── results/                       # Outputs (gitignored)
 ```
 
 ---
@@ -284,21 +275,9 @@ cfg-dpo/
 pip install -r requirements.txt
 ```
 
-**Environment variables:**
-
-- `HF_TOKEN`: HuggingFace token (set in `~/.hf_token.env`)
-- `WANDB_API_KEY`: Weights & Biases key (set in `~/.wandb_token.env`)
-
-All training scripts support `--use_wandb` with `--wandb_run_name`. Dashboard: [https://wandb.ai/cfg-dpo/Self-Align%20to%20Explain](https://wandb.ai/cfg-dpo/Self-Align%20to%20Explain)
-
----
-
-## Future Work
-
-- **Consistent `<edit>`-tag training targets (targeted retrain)** — offline methods (DPO/SimPO/SFT) currently train on the bare edited text with the `<edit>…</edit>` wrapper stripped, while the eval parser and online GRPO/GDPO rewards require the tags. The **dual-parse diagnostic** (`PARSE_TAG_ISSUE.md §9`) quantified the impact: the **featured matrix is unaffected** (0/12 pick changes), so no global retrain is needed — but the gate wrongly excluded genuinely strong **Llama offline** runs. Planned fix is a **targeted retrain with `<edit>`-wrapped targets** of just **Llama SNLI-H DPO, Llama SNLI-H SimPO, and Llama SNLI-P DPO** (the cells that re-qualify at +6.8 to +9.9% under honest compliance), re-evaluated with the unchanged strict parser
-- **Benchmark evaluation** — ✅ done: MMLU + ANLI across all 76 models (4 base + 72 adapters); no capability degradation (ΔMMLU mean +0.0pp, ΔANLI +0.1pp). See `BENCHMARKS.md`
-- **Parse-rate-aware reporting** — the "best non-degraded run" selection (parse ≥ 15% of base) is documented in `OVERVIEW.md § Parse-gate exclusions`; could be formalized into a combined LFR×parse quality score
+**Environment variables:** `HF_TOKEN` (HuggingFace token); optionally `WANDB_API_KEY`
+if training with `--use_wandb`.
 
 ## License
 
-MIT
+MIT — see [`LICENSE`](LICENSE).

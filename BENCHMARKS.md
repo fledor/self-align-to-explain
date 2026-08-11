@@ -1,6 +1,6 @@
 # General-Capability Benchmarks (MMLU + ANLI)
 
-Zero-shot `lm-eval` (mmlu, anli_r1/r2/r3), `acc`. Each adapter from `best_models/` applied to its base; Δ columns are vs the **unmodified base model**. ANLI = mean of r1/r2/r3. Purpose: check whether CF fine-tuning degrades general capability. 76 models (4 base + 72 adapters).
+Zero-shot `lm-eval` (mmlu, anli_r1/r2/r3), `acc`. Each of the 72 released adapters (see `BEST_CONFIGS.md`) applied to its base; Δ columns are vs the **unmodified base model**. ANLI = mean of r1/r2/r3. Purpose: check whether CF fine-tuning degrades general capability. 76 models (4 base + 72 adapters).
 
 ## Base models (reference)
 

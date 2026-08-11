@@ -1,10 +1,11 @@
-# Data, results, and logs directories
-#data/
+# Output directories
 results/
 logs/
-
-# Model cache
 model_cache/
+best_models/
+
+# Local development material (not released)
+dev/
 
 # Python
 __pycache__/
@@ -48,16 +49,11 @@ env/
 .DS_Store
 Thumbs.db
 
-# Run scripts
+# Run scripts (cluster-specific, not released)
 *.sh
-
-# Working analysis docs (local only)
-GRPO_ANALYSIS.md
-GDPO_BOOLQ_IMPROVEMENTS.md
 
 # Slurm output
 slurm-*.out
 
 # Weights & Biases
 wandb/
-
