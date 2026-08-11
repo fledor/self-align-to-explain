@@ -279,4 +279,9 @@ if training with `--use_wandb`.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+The code is MIT-licensed — see [`LICENSE`](LICENSE). The files under `data/` are
+processed copies of BoolQ (CC BY-SA 3.0) and SNLI (CC BY-SA 4.0) and remain under
+those licenses. The released adapters are derivatives of their base models; adapters
+of Qwen2.5-3B-Instruct and Llama-3.1-8B-Instruct are additionally subject to the Qwen
+Research License and the Llama 3.1 Community License respectively (see the Hugging
+Face model card).
