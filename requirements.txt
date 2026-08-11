@@ -1,38 +1,38 @@
-# DPO Training with LoRA Requirements
-# ====================================
+# Pinned to the environment of the final featured training runs and the frozen
+# fair-base re-evaluation (May-Jul 2026). Earlier runs used older versions of this
+# stack; per-run snapshots ship with each released adapter (wandb_config.yaml).
 
 # Core ML frameworks
-torch>=2.1.0
-transformers>=4.40.0
+torch==2.12.0
+transformers==5.9.0
 
-# TRL for DPO/GRPO training (GRPOTrainer requires >=0.15.0)
-trl>=0.15.0
+# TRL for DPO/SimPO/GRPO training
+trl==1.5.1
 
 # PEFT for LoRA adapters
-peft>=0.10.0
+peft==0.19.1
 
 # Datasets
-datasets>=2.18.0
+datasets==4.8.5
 
-# Quantization support (for QLoRA)
-bitsandbytes>=0.43.0
+# Quantization support (QLoRA)
+bitsandbytes==0.49.2
 
 # Accelerate for distributed training
-accelerate>=0.28.0
+accelerate==1.13.0
 
-# Additional utilities
-scipy>=1.11.0
-sentencepiece>=0.1.99
-tqdm>=4.66.0
-soxr>=0.3.0  # Required by transformers for audio utilities
+# Utilities
+numpy==1.24.4
+scipy==1.11.1
+sentencepiece==0.2.1
+tqdm==4.67.3
+soxr==1.1.0  # Required by transformers for audio utilities
 
 # Semantic similarity for counterfactual evaluation
-sentence-transformers>=2.2.0
+sentence-transformers==5.5.1
 
 # Evaluation metrics
-python-Levenshtein>=0.21.0  # Fast edit distance computation
+python-Levenshtein==0.27.3  # Fast edit distance computation
 
-# Optional: For logging and monitoring
-# wandb>=0.16.0
-# tensorboard>=2.15.0
-
+# Optional: logging
+# wandb==0.27.0

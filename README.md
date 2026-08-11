@@ -14,7 +14,7 @@ perplexity (PPL). Tasks: **BoolQ** (edit the passage to flip a yes/no answer),
 Base models: **Qwen2.5-3B/7B/14B-Instruct** and **Llama-3.1-8B-Instruct**. All methods
 train QLoRA adapters (4-bit NF4, LoRA r=32, α=16). Learning rate and a few method
 hyperparameters are tuned per model×dataset cell; the winning configuration for each
-cell is in [`BEST_CONFIGS.md`](BEST_CONFIGS.md).
+cell is in [`BEST_CONFIGS.md`](reports/BEST_CONFIGS.md).
 
 | Method    | Type      | Description                                                                          |
 | --------- | --------- | ------------------------------------------------------------------------------------ |
@@ -31,8 +31,8 @@ cell is in [`BEST_CONFIGS.md`](BEST_CONFIGS.md).
 ΔLFR (label-flip-rate improvement over the same model's base, in percentage points) for
 the best parse-gated run per cell; fair frozen-base evaluation, N=200 prompts × 10
 counterfactuals. GRPO shows whichever reward construction (composite or decomposed) wins
-the cell. Bold = best method in the cell. Full metrics per run: `frozen_metrics.json`
-and `results_charts.html`.
+the cell. Bold = best method in the cell. Full metrics per run: `reports/frozen_metrics.json`
+and `reports/results_charts.html`.
 
 | Model | Method | BoolQ | SNLI-Premise | SNLI-Hypothesis |
 | --- | --- | --- | --- | --- |
@@ -72,18 +72,18 @@ and `results_charts.html`.
   ~+8–10% to +21.5% at 7B (and similarly at 3B), only a higher rate lifts DPO above base
   at 14B and on Llama, the SimPO margin is decisive at 3B, and online runs peak at
   0.25–0.75 epochs and are early-stopped by checkpoint sweep. The winning configuration
-  per cell is recorded in [`BEST_CONFIGS.md`](BEST_CONFIGS.md).
+  per cell is recorded in [`BEST_CONFIGS.md`](reports/BEST_CONFIGS.md).
 - **Metric hygiene matters.** High-ΔLFR runs can be parse-collapse artifacts, so featured
   runs must retain a parse rate ≥ 15% of base; NED is the median over genuine edits
   (NED > 0) and PPL the median; base verdicts are frozen so every method in a cell is
   compared against the identical base LFR.
 - **Counterfactual fine-tuning costs no general capability.** Across all 72 released
   adapters, MMLU stays within ±0.4 pp and ANLI within +1.2/−0.7 pp of base — see
-  [`BENCHMARKS.md`](BENCHMARKS.md).
+  [`BENCHMARKS.md`](reports/BENCHMARKS.md).
 
-Per-run metrics for all featured runs are in `frozen_metrics.json`/`.tsv` and the
-interactive `results_charts.html`; qualitative examples of the edits each method
-produces are in `qualitative_cf_examples_7b_*.md`.
+Per-run metrics for all featured runs are in `reports/frozen_metrics.json`/`.tsv` and
+the interactive `reports/results_charts.html`; qualitative examples of the edits each
+method produces are in `reports/qualitative/`.
 
 ---
 
@@ -115,7 +115,7 @@ produces are in `qualitative_cf_examples_7b_*.md`.
 
 ## Usage
 
-The exact command behind every featured run is in [`BEST_CONFIGS.md`](BEST_CONFIGS.md);
+The exact command behind every featured run is in [`BEST_CONFIGS.md`](reports/BEST_CONFIGS.md);
 the commands below show the shape of each stage.
 
 **Stages 1–3 — generate training data** (offline methods only):
@@ -255,11 +255,12 @@ self-align-to-explain/
 ├── gdpo_trainer.py                # GDPOTrainer subclass
 ├── evaluate_models.py             # Stage 5: Model comparison (frozen fair base)
 │
-├── BEST_CONFIGS.md                # Exact winning configuration per cell (72 runs)
-├── frozen_metrics.json / .tsv     # Frozen fair-eval metrics behind all tables
-├── BENCHMARKS.md                  # MMLU / ANLI capability check
-├── results_charts.html            # Interactive results visualization
-├── qualitative_cf_examples_7b_*.md# Qualitative counterfactual examples
+├── reports/
+│   ├── BEST_CONFIGS.md            # Exact winning configuration per cell (72 runs)
+│   ├── frozen_metrics.json / .tsv # Frozen fair-eval metrics behind all tables
+│   ├── BENCHMARKS.md              # MMLU / ANLI capability check
+│   ├── results_charts.html        # Interactive results visualization
+│   └── qualitative/               # Qualitative counterfactual examples (7B)
 │
 ├── data/                          # Datasets (tracked)
 └── results/                       # Outputs (gitignored)
