@@ -2,19 +2,20 @@
 ### Comparing Post-Training Methods for Counterfactual Generation
 
 Code and results for the thesis *Self-Align to Explain*. It compares five post-training
-methods (**SFT, DPO, SimPO, GRPO, GDPO**) for fine-tuning an instruction-tuned LLM to
-generate **minimal, label-flipping counterfactuals** for text classification.
+methods for fine-tuning an instruction-tuned LLM to generate **minimal, label-flipping
+counterfactuals** for text classification.
 
-The task: given an input the model classifies as label *A*, produce a minimal edit that
-makes the same model predict a different label *B*. Each model judges its own
+Given an input the model classifies as label *A*, the task is to produce a minimal edit
+that makes the same model predict a different label *B*. Each model judges its own
 counterfactuals, so a flip is measured against the base model's prediction, not the
-ground truth. Metrics are label flip rate (LFR), normalized edit distance (NED), and
-perplexity (PPL). Tasks: **BoolQ** (edit the passage to flip a yes/no answer),
-**SNLI-Premise** and **SNLI-Hypothesis** (edit one side to change the NLI relation).
-Base models: **Qwen2.5-3B/7B/14B-Instruct** and **Llama-3.1-8B-Instruct**. All methods
-train QLoRA adapters (4-bit NF4, LoRA r=32, α=16). Learning rate and a few method
-hyperparameters are tuned per model×dataset cell; the winning configuration for each
-cell is in [`BEST_CONFIGS.md`](reports/BEST_CONFIGS.md).
+ground truth. We report label flip rate (LFR), normalized edit distance (NED), and
+perplexity (PPL).
+
+| Dataset | Edit target | Goal |
+| --- | --- | --- |
+| BoolQ | Passage | Flip the yes/no answer |
+| SNLI-Premise | Premise | Change the NLI relation |
+| SNLI-Hypothesis | Hypothesis | Change the NLI relation |
 
 | Method    | Type      | Description                                                                          |
 | --------- | --------- | ------------------------------------------------------------------------------------ |
@@ -23,6 +24,11 @@ cell is in [`BEST_CONFIGS.md`](reports/BEST_CONFIGS.md).
 | **SimPO** | Offline   | Reference-free preference optimization with length normalization and margin γ        |
 | **GRPO**  | Online RL | Group Relative Policy Optimization with reward-driven generation during training     |
 | **GDPO**  | Online RL | GRPO variant with per-reward (decoupled) group normalization for multi-reward setups |
+
+Base models: Qwen2.5-3B/7B/14B-Instruct and Llama-3.1-8B-Instruct. All methods train
+QLoRA adapters (4-bit NF4, LoRA r=32, α=16). Learning rate and a few method
+hyperparameters are tuned per model×dataset cell; the winning configuration for each
+cell is in [`BEST_CONFIGS.md`](reports/BEST_CONFIGS.md).
 
 ---
 
